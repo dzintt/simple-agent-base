@@ -101,16 +101,42 @@ Contributor guide:
 
 ## Install
 
-Install from a local checkout:
+This repo is already structured as an installable Python package. Right now the public install path is GitHub.
+
+Install from GitHub with `pip`:
 
 ```bash
-pip install .
+python -m pip install "git+https://github.com/dzintt/agent-harness-base.git"
 ```
 
-Install directly from GitHub:
+Install from GitHub with `uv`:
 
 ```bash
-pip install "git+https://github.com/dzintt/agent-harness-base.git"
+uv add "git+https://github.com/dzintt/agent-harness-base.git"
+```
+
+Install from a local checkout with `pip`:
+
+```bash
+python -m pip install .
+```
+
+Install from a local checkout with `uv`:
+
+```bash
+uv sync
+```
+
+Install local development dependencies with `pip`:
+
+```bash
+python -m pip install -e ".[dev]"
+```
+
+Install local development dependencies with `uv`:
+
+```bash
+uv sync --dev
 ```
 
 Import it as:
@@ -119,13 +145,7 @@ Import it as:
 import agent_harness
 ```
 
-For local development from the repo root:
-
-```bash
-uv sync
-```
-
-If you want users to run `pip install agent-harness-base` without the GitHub URL, publish the built package to PyPI:
+If you want users to run `pip install agent-harness-base` or `uv add agent-harness-base` without a GitHub URL, publish the built package to PyPI:
 
 ```bash
 uv build
@@ -142,6 +162,22 @@ Run the smallest example:
 
 ```bash
 uv run python examples/basic_agent.py
+```
+
+Minimal usage after install:
+
+`pip` install example:
+
+```bash
+python -m pip install "git+https://github.com/dzintt/agent-harness-base.git"
+python -c "from agent_harness import Agent, AgentConfig; print(AgentConfig(model='gpt-5.4'))"
+```
+
+`uv` install example:
+
+```bash
+uv add "git+https://github.com/dzintt/agent-harness-base.git"
+uv run python -c "from agent_harness import Agent, AgentConfig; print(AgentConfig(model='gpt-5.4'))"
 ```
 
 ## Quickstart
