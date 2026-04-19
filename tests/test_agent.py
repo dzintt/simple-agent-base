@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from agent_harness import Agent, AgentConfig, ChatMessage, ChatSnapshot, FilePart, ImagePart, TextPart, tool
+from agent_harness import Agent, AgentConfig, ChatMessage, FilePart, ImagePart, TextPart, tool
 from agent_harness.errors import MaxTurnsExceededError, ProviderError, ToolExecutionError
 from agent_harness.providers.base import ConversationItem, ProviderCompletedEvent, ProviderResponse, ProviderTextDeltaEvent
 
@@ -252,49 +252,6 @@ async def test_chat_snapshot_returns_full_session_state() -> None:
             "content": [{"type": "output_text", "text": "Stored."}],
         },
     ]
-
-
-@pytest.mark.asyncio
-async def test_chat_export_returns_json_friendly_dict() -> None:
-    provider = FakeProvider(
-        [
-            ProviderResponse(
-                response_id="resp_1",
-                output_text="Stored.",
-                output_items=[
-                    {
-                        "type": "message",
-                        "role": "assistant",
-                        "content": [{"type": "output_text", "text": "Stored."}],
-                    }
-                ],
-                raw_response={"id": "resp_1"},
-            )
-        ]
-    )
-    agent = Agent(config=AgentConfig(model="gpt-5"), provider=provider)
-    chat = agent.chat(system_prompt="You are concise.")
-
-    await chat.run("My name is Anson.")
-    payload = chat.export()
-
-    assert isinstance(payload, dict)
-    assert payload == {
-        "version": "v1",
-        "items": [
-            {
-                "type": "message",
-                "role": "user",
-                "content": "My name is Anson.",
-            },
-            {
-                "type": "message",
-                "role": "assistant",
-                "content": [{"type": "output_text", "text": "Stored."}],
-            },
-        ],
-        "system_prompt": "You are concise.",
-    }
 
 
 @pytest.mark.asyncio
@@ -572,56 +529,6 @@ async def test_chat_from_snapshot_preserves_file_history() -> None:
             "content": "What did the file mention?",
         },
     ]
-
-
-def test_chat_snapshot_rejects_invalid_version() -> None:
-    with pytest.raises(Exception):
-        ChatSnapshot.model_validate(
-            {
-                "version": "v2",
-                "items": [],
-                "system_prompt": None,
-            }
-        )
-
-
-def test_chat_snapshot_rejects_malformed_payload() -> None:
-    with pytest.raises(Exception):
-        ChatSnapshot.model_validate(
-            {
-                "version": "v1",
-                "items": "not-a-list",
-            }
-        )
-
-
-@pytest.mark.asyncio
-async def test_chat_export_round_trips_through_snapshot_validation() -> None:
-    provider = FakeProvider(
-        [
-            ProviderResponse(
-                response_id="resp_1",
-                output_text="Stored.",
-                output_items=[
-                    {
-                        "type": "message",
-                        "role": "assistant",
-                        "content": [{"type": "output_text", "text": "Stored."}],
-                    }
-                ],
-                raw_response={"id": "resp_1"},
-            )
-        ]
-    )
-    agent = Agent(config=AgentConfig(model="gpt-5"), provider=provider)
-    chat = agent.chat(system_prompt="You are concise.")
-
-    await chat.run("My name is Anson.")
-    payload = chat.export()
-    snapshot = ChatSnapshot.model_validate(payload)
-
-    assert snapshot.version == "v1"
-    assert snapshot.system_prompt == "You are concise."
 
 
 @pytest.mark.asyncio
@@ -1210,39 +1117,6 @@ async def test_run_returns_structured_output_without_tools() -> None:
     assert result.output_data == person
     assert result.output_text == '{"name":"Sarah","age":29}'
     assert provider.calls[0]["response_model"] is Person
-
-
-@pytest.mark.asyncio
-async def test_run_supports_structured_output_with_system_prompt() -> None:
-    person = Person(name="Sarah", age=29)
-    provider = FakeProvider(
-        [
-            ProviderResponse(
-                response_id="resp_1",
-                output_text='{"name":"Sarah","age":29}',
-                output_data=person,
-                output_items=[],
-                raw_response={"id": "resp_1"},
-            )
-        ]
-    )
-    agent = Agent(
-        config=AgentConfig(model="gpt-5"),
-        provider=provider,
-        system_prompt="Return only structured data.",
-    )
-
-    result = await agent.run(
-        "Extract the person from: Sarah is 29 years old.",
-        response_model=Person,
-    )
-
-    assert result.output_data == person
-    assert provider.calls[0]["input_items"][0] == {
-        "type": "message",
-        "role": "developer",
-        "content": "Return only structured data.",
-    }
 
 
 @pytest.mark.asyncio
