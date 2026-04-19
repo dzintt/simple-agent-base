@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from agent_harness import Agent, AgentConfig, ChatMessage, ChatSnapshot, ImagePart, TextPart, tool
+from agent_harness import Agent, AgentConfig, ChatMessage, ChatSnapshot, FilePart, ImagePart, TextPart, tool
 from agent_harness.errors import MaxTurnsExceededError, ProviderError, ToolExecutionError
 from agent_harness.providers.base import ConversationItem, ProviderCompletedEvent, ProviderResponse, ProviderTextDeltaEvent
 
@@ -503,6 +503,77 @@ async def test_chat_from_snapshot_preserves_multimodal_history() -> None:
     ]
 
 
+@pytest.mark.asyncio
+async def test_chat_from_snapshot_preserves_file_history() -> None:
+    provider = FakeProvider(
+        [
+            ProviderResponse(
+                response_id="resp_1",
+                output_text="The file mentioned teal.",
+                output_items=[
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "The file mentioned teal."}],
+                    }
+                ],
+                raw_response={"id": "resp_1"},
+            )
+        ]
+    )
+    agent = Agent(config=AgentConfig(model="gpt-5"), provider=provider)
+    restored = agent.chat_from_snapshot(
+        {
+            "version": "v1",
+            "items": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "Remember this PDF."},
+                        {
+                            "type": "input_file",
+                            "file_url": "https://example.com/report.pdf",
+                        },
+                    ],
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Stored the file."}],
+                },
+            ],
+        }
+    )
+
+    result = await restored.run("What did the file mention?")
+
+    assert result.output_text == "The file mentioned teal."
+    assert provider.calls[0]["input_items"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Remember this PDF."},
+                {
+                    "type": "input_file",
+                    "file_url": "https://example.com/report.pdf",
+                },
+            ],
+        },
+        {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Stored the file."}],
+        },
+        {
+            "type": "message",
+            "role": "user",
+            "content": "What did the file mention?",
+        },
+    ]
+
+
 def test_chat_snapshot_rejects_invalid_version() -> None:
     with pytest.raises(Exception):
         ChatSnapshot.model_validate(
@@ -658,6 +729,48 @@ async def test_run_accepts_multimodal_message() -> None:
                     "type": "input_image",
                     "image_url": "https://example.com/cat.png",
                     "detail": "auto",
+                },
+            ],
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_accepts_file_message() -> None:
+    provider = FakeProvider(
+        [
+            ProviderResponse(
+                response_id="resp_1",
+                output_text="The file says hello.",
+                output_items=[],
+                raw_response={"id": "resp_1"},
+            )
+        ]
+    )
+    agent = Agent(config=AgentConfig(model="gpt-5"), provider=provider)
+
+    result = await agent.run(
+        [
+            ChatMessage(
+                role="user",
+                content=[
+                    TextPart("What does this file say?"),
+                    FilePart.from_url("https://example.com/report.pdf"),
+                ],
+            )
+        ]
+    )
+
+    assert result.output_text == "The file says hello."
+    assert provider.calls[0]["input_items"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "What does this file say?"},
+                {
+                    "type": "input_file",
+                    "file_url": "https://example.com/report.pdf",
                 },
             ],
         }
@@ -1649,6 +1762,30 @@ def test_image_part_from_file_creates_data_url(tmp_path: Path) -> None:
 
     assert part.detail == "high"
     assert part.image_url.startswith("data:image/png;base64,")
+
+
+def test_file_part_from_file_creates_data_url(tmp_path: Path) -> None:
+    file_path = tmp_path / "sample.txt"
+    file_path.write_text("hello world")
+
+    part = FilePart.from_file(str(file_path))
+
+    assert part.filename == "sample.txt"
+    assert part.file_data is not None
+    assert part.file_data.startswith("data:text/plain;base64,")
+
+
+def test_file_part_from_file_rejects_missing_paths() -> None:
+    with pytest.raises(ValueError, match="does not exist"):
+        FilePart.from_file("missing.pdf")
+
+
+def test_file_part_from_file_rejects_unsupported_types(tmp_path: Path) -> None:
+    file_path = tmp_path / "archive.zip"
+    file_path.write_bytes(b"zip-data")
+
+    with pytest.raises(ValueError, match="Unsupported file type"):
+        FilePart.from_file(str(file_path))
 
 
 def test_image_part_from_file_rejects_missing_paths() -> None:

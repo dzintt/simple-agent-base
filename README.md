@@ -6,6 +6,10 @@ The package exposes a minimal public API:
 
 - `Agent`
 - `AgentConfig`
+- `ChatMessage`
+- `TextPart`
+- `ImagePart`
+- `FilePart`
 - `ToolRegistry`
 - `tool`
 
@@ -18,6 +22,7 @@ It is designed for:
 - optional parallel tool execution
 - streaming text deltas through an async iterator
 - trivial structured outputs with Pydantic models
+- file inputs for PDFs, documents, spreadsheets, presentations, and text/code files
 
 ## What This Gives You
 
@@ -277,6 +282,59 @@ await chat.run(
 result = await chat.run("What was in the photo?")
 ```
 
+## Files
+
+Plain text still stays trivial:
+
+```python
+result = await agent.run("Hello")
+```
+
+Only switch to a multimodal content list when you actually need files.
+
+### Local file
+
+```python
+from agent_harness import Agent, AgentConfig, ChatMessage, FilePart, TextPart
+
+agent = Agent(config=AgentConfig(model="gpt-5"))
+
+result = await agent.run(
+    [
+        ChatMessage(
+            role="user",
+            content=[
+                TextPart("Summarize this PDF."),
+                FilePart.from_file("report.pdf"),
+            ],
+        )
+    ]
+)
+```
+
+### File URL
+
+```python
+result = await agent.run(
+    [
+        ChatMessage(
+            role="user",
+            content=[
+                TextPart("What are the key points in this document?"),
+                FilePart.from_url("https://example.com/report.pdf"),
+            ],
+        )
+    ]
+)
+```
+
+Notes:
+
+- `FilePart.from_file(...)` encodes the local file as a Base64 data URL automatically
+- `FilePart.from_url(...)` uses the official Responses `input_file.file_url` path
+- file support intentionally avoids the OpenAI Files API so it remains compatible with custom OpenAI-compatible base URLs
+- local file support follows the current OpenAI file-input guide categories: PDFs, spreadsheets, rich documents, presentations, and text/code files
+
 ## Conversation History
 
 There are now two trivial ways to work with more than one message.
@@ -371,6 +429,7 @@ Available examples:
 - [system_prompt.py](/C:/Users/Anson/Desktop/agent-harness-base/examples/system_prompt.py): first-class system prompt defaults and one-off overrides
 - [parallel_tools.py](/C:/Users/Anson/Desktop/agent-harness-base/examples/parallel_tools.py): opt into concurrent same-turn tool execution
 - [image_input.py](/C:/Users/Anson/Desktop/agent-harness-base/examples/image_input.py): one-turn multimodal input with text plus an image
+- [file_input.py](/C:/Users/Anson/Desktop/agent-harness-base/examples/file_input.py): one-turn multimodal input with text plus a file such as a PDF
 - [chat_with_images.py](/C:/Users/Anson/Desktop/agent-harness-base/examples/chat_with_images.py): follow-up chat after sending an image
 - [structured_output.py](/C:/Users/Anson/Desktop/agent-harness-base/examples/structured_output.py): extract typed data with a Pydantic schema
 - [structured_with_tools.py](/C:/Users/Anson/Desktop/agent-harness-base/examples/structured_with_tools.py): combine tools and structured outputs
@@ -544,6 +603,7 @@ An `OPENAI_MODEL` value can also be used as a convenience when creating `AgentCo
 - `ChatSnapshot(version="v1", items=[...], system_prompt=...)`: exact resumable chat session state
 - `TextPart(...)`: text content inside a multimodal message
 - `ImagePart.from_url(...)` / `ImagePart.from_file(...)`: image content inside a multimodal message
+- `FilePart.from_url(...)` / `FilePart.from_file(...)`: file content inside a multimodal message
 - `@tool`: tool decorator
 - `ToolRegistry`: explicit tool registration if you need it
 

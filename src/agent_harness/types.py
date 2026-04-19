@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 @dataclass(slots=True)
@@ -41,6 +41,71 @@ class ToolExecutionResult(BaseModel):
 
 
 ImageDetail = Literal["low", "high", "auto", "original"]
+
+SUPPORTED_DOCUMENT_FILE_MIME_TYPES = {
+    "application/csv",
+    "application/json",
+    "application/msword",
+    "application/pdf",
+    "application/rtf",
+    "application/vnd.ms-excel",
+    "application/vnd.ms-powerpoint",
+    "application/vnd.oasis.opendocument.text",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/xml",
+    "application/yaml",
+    "message/rfc822",
+    "text/calendar",
+    "text/csv",
+    "text/html",
+    "text/markdown",
+    "text/plain",
+    "text/rtf",
+    "text/tab-separated-values",
+    "text/xml",
+}
+
+FALLBACK_DOCUMENT_FILE_MIME_TYPES = {
+    ".csv": "text/csv",
+    ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".json": "application/json",
+    ".md": "text/markdown",
+    ".markdown": "text/markdown",
+    ".odt": "application/vnd.oasis.opendocument.text",
+    ".pdf": "application/pdf",
+    ".ppt": "application/vnd.ms-powerpoint",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".rtf": "application/rtf",
+    ".tsv": "text/tab-separated-values",
+    ".txt": "text/plain",
+    ".xls": "application/vnd.ms-excel",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".xml": "application/xml",
+    ".yaml": "application/yaml",
+    ".yml": "application/yaml",
+}
+
+
+def _guess_supported_file_mime_type(file_path: Path) -> str:
+    suffix = file_path.suffix.lower()
+    guessed_mime_type, _ = mimetypes.guess_type(file_path.name)
+
+    if guessed_mime_type is not None and (
+        guessed_mime_type.startswith("text/") or guessed_mime_type in SUPPORTED_DOCUMENT_FILE_MIME_TYPES
+    ):
+        return guessed_mime_type
+
+    fallback = FALLBACK_DOCUMENT_FILE_MIME_TYPES.get(suffix)
+    if fallback is not None:
+        return fallback
+
+    raise ValueError(
+        "Unsupported file type for FilePart.from_file(...). "
+        "Use a document or text file such as PDF, DOCX, XLSX, PPTX, CSV, TXT, JSON, or XML."
+    )
 
 
 class TextPart(BaseModel):
@@ -100,7 +165,51 @@ class ImagePart(BaseModel):
         return cls(image_url=data_url, detail=detail)
 
 
-ContentPart = Annotated[TextPart | ImagePart, Field(discriminator="type")]
+class FilePart(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["file"] = "file"
+    file_url: str | None = None
+    file_data: str | None = None
+    filename: str | None = None
+
+    @model_validator(mode="after")
+    def validate_source(self) -> FilePart:
+        provided = [value for value in (self.file_url, self.file_data) if value is not None]
+        if len(provided) != 1:
+            raise ValueError("FilePart requires exactly one of file_url or file_data.")
+
+        if self.file_data is not None and not self.filename:
+            raise ValueError("FilePart requires filename when using file_data.")
+
+        return self
+
+    @classmethod
+    def from_url(cls, url: str) -> FilePart:
+        if not url.strip():
+            raise ValueError("File URL cannot be empty.")
+        return cls(file_url=url)
+
+    @classmethod
+    def from_file(cls, path: str) -> FilePart:
+        file_path = Path(path)
+        if not file_path.exists():
+            raise ValueError(f"File does not exist: {file_path}")
+        if not file_path.is_file():
+            raise ValueError(f"File path is not a file: {file_path}")
+
+        try:
+            raw_bytes = file_path.read_bytes()
+        except OSError as exc:
+            raise ValueError(f"Could not read file: {file_path}") from exc
+
+        mime_type = _guess_supported_file_mime_type(file_path)
+        encoded = base64.b64encode(raw_bytes).decode("ascii")
+        data_url = f"data:{mime_type};base64,{encoded}"
+        return cls(file_data=data_url, filename=file_path.name)
+
+
+ContentPart = Annotated[TextPart | ImagePart | FilePart, Field(discriminator="type")]
 
 
 class ChatMessage(BaseModel):

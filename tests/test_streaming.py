@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from agent_harness import Agent, AgentConfig, ChatMessage, ChatSnapshot, ImagePart, TextPart, tool
+from agent_harness import Agent, AgentConfig, ChatMessage, ChatSnapshot, FilePart, ImagePart, TextPart, tool
 from agent_harness.providers.base import ConversationItem, ProviderCompletedEvent, ProviderResponse, ProviderTextDeltaEvent
 
 
@@ -1046,6 +1046,56 @@ async def test_stream_accepts_multimodal_message() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stream_accepts_file_message() -> None:
+    provider = FakeStreamingProvider(
+        [
+            [
+                ProviderTextDeltaEvent(delta="file"),
+                ProviderCompletedEvent(
+                    response=ProviderResponse(
+                        response_id="resp_1",
+                        output_text="file",
+                        output_items=[],
+                        raw_response={"id": "resp_1"},
+                    )
+                ),
+            ]
+        ]
+    )
+    agent = Agent(config=AgentConfig(model="gpt-5"), provider=provider)
+
+    events = [
+        event
+        async for event in agent.stream(
+            [
+                ChatMessage(
+                    role="user",
+                    content=[
+                        TextPart("Describe this file."),
+                        FilePart.from_url("https://example.com/report.pdf"),
+                    ],
+                )
+            ]
+        )
+    ]
+
+    assert [event.type for event in events] == ["text_delta", "completed"]
+    assert provider.calls[0]["input_items"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Describe this file."},
+                {
+                    "type": "input_file",
+                    "file_url": "https://example.com/report.pdf",
+                },
+            ],
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_chat_session_stream_preserves_multimodal_history() -> None:
     provider = FakeStreamingProvider(
         [
@@ -1125,5 +1175,88 @@ async def test_chat_session_stream_preserves_multimodal_history() -> None:
             "type": "message",
             "role": "user",
             "content": "What was in the image?",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_chat_session_stream_preserves_file_history() -> None:
+    provider = FakeStreamingProvider(
+        [
+            [
+                ProviderCompletedEvent(
+                    response=ProviderResponse(
+                        response_id="resp_1",
+                        output_text="Stored file.",
+                        output_items=[
+                            {
+                                "type": "message",
+                                "role": "assistant",
+                                "content": [{"type": "output_text", "text": "Stored file."}],
+                            }
+                        ],
+                        raw_response={"id": "resp_1"},
+                    )
+                )
+            ],
+            [
+                ProviderCompletedEvent(
+                    response=ProviderResponse(
+                        response_id="resp_2",
+                        output_text="It mentioned teal.",
+                        output_items=[
+                            {
+                                "type": "message",
+                                "role": "assistant",
+                                "content": [{"type": "output_text", "text": "It mentioned teal."}],
+                            }
+                        ],
+                        raw_response={"id": "resp_2"},
+                    )
+                )
+            ],
+        ]
+    )
+    agent = Agent(config=AgentConfig(model="gpt-5"), provider=provider)
+    chat = agent.chat()
+
+    _ = [
+        event
+        async for event in chat.stream(
+            [
+                ChatMessage(
+                    role="user",
+                    content=[
+                        TextPart("Remember this file."),
+                        FilePart.from_url("https://example.com/report.pdf"),
+                    ],
+                )
+            ]
+        )
+    ]
+    events = [event async for event in chat.stream("What did the file mention?")]
+
+    assert events[-1].type == "completed"
+    assert provider.calls[1]["input_items"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Remember this file."},
+                {
+                    "type": "input_file",
+                    "file_url": "https://example.com/report.pdf",
+                },
+            ],
+        },
+        {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Stored file."}],
+        },
+        {
+            "type": "message",
+            "role": "user",
+            "content": "What did the file mention?",
         },
     ]

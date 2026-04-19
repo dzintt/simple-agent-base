@@ -10,7 +10,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from agent_harness import Agent, AgentConfig, ChatMessage, ImagePart, TextPart, tool
+from agent_harness import Agent, AgentConfig, ChatMessage, FilePart, ImagePart, TextPart, tool
 
 class Person(BaseModel):
     name: str
@@ -85,6 +85,14 @@ def make_red_png_file() -> Path:
     return path
 
 
+def make_pdf_file(text: str) -> Path:
+    handle = tempfile.NamedTemporaryFile(prefix="agent-harness-live-", suffix=".pdf", delete=False)
+    path = Path(handle.name)
+    handle.write(make_simple_pdf(text))
+    handle.close()
+    return path
+
+
 def make_solid_png(width: int, height: int, *, red: int, green: int, blue: int) -> bytes:
     png_header = b"\x89PNG\r\n\x1a\n"
 
@@ -101,6 +109,39 @@ def make_solid_png(width: int, height: int, *, red: int, green: int, blue: int) 
     raw = row * height
     idat = zlib.compress(raw)
     return png_header + chunk(b"IHDR", ihdr) + chunk(b"IDAT", idat) + chunk(b"IEND", b"")
+
+
+def make_simple_pdf(text: str) -> bytes:
+    escaped_text = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+    content_stream = f"BT /F1 18 Tf 72 720 Td ({escaped_text}) Tj ET".encode("latin-1")
+
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Count 1 /Kids [3 0 R] >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+        b"<< /Length %d >>\nstream\n%s\nendstream" % (len(content_stream), content_stream),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+
+    parts = [b"%PDF-1.4\n"]
+    offsets: list[int] = [0]
+    for index, obj in enumerate(objects, start=1):
+        offsets.append(sum(len(part) for part in parts))
+        parts.append(f"{index} 0 obj\n".encode("ascii"))
+        parts.append(obj)
+        parts.append(b"\nendobj\n")
+
+    xref_offset = sum(len(part) for part in parts)
+    parts.append(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
+    parts.append(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        parts.append(f"{offset:010d} 00000 n \n".encode("ascii"))
+    parts.append(
+        b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF"
+        % (len(objects) + 1, xref_offset)
+    )
+
+    return b"".join(parts)
 
 
 def print_config_summary() -> None:
@@ -129,6 +170,15 @@ def describe_message_content(content: Any) -> list[str]:
                 else:
                     preview = part.image_url
                 lines.append(f"part {index}: image -> {preview} [detail={part.detail}]")
+            elif isinstance(part, FilePart):
+                if part.file_url is not None:
+                    preview = part.file_url
+                elif part.file_data is not None:
+                    preview = f"data-url ({len(part.file_data)} chars)"
+                else:
+                    preview = "unknown"
+                filename_suffix = f" [filename={part.filename}]" if part.filename else ""
+                lines.append(f"part {index}: file -> {preview}{filename_suffix}")
             elif isinstance(part, dict):
                 part_type = part.get("type")
                 if part_type == "text":
@@ -140,6 +190,13 @@ def describe_message_content(content: Any) -> list[str]:
                     else:
                         preview = str(image_url)
                     lines.append(f"part {index}: image -> {preview} [detail={part.get('detail', 'auto')}]")
+                elif part_type == "file":
+                    preview = (
+                        part.get("file_url")
+                        or f"data-url ({len(str(part.get('file_data', '')))} chars)"
+                    )
+                    filename_suffix = f" [filename={part.get('filename')}]" if part.get("filename") else ""
+                    lines.append(f"part {index}: file -> {preview}{filename_suffix}")
                 else:
                     lines.append(f"part {index}: raw -> {part}")
             else:
@@ -459,6 +516,29 @@ async def run_chat_persistence() -> None:
         await agent.aclose()
 
 
+async def run_file_input() -> None:
+    file_path = make_pdf_file("Favorite color: teal")
+    agent = Agent(config=make_config())
+    input_data = [
+        ChatMessage(
+            role="user",
+            content=[
+                TextPart("Read this file and answer with the favorite color only."),
+                FilePart.from_file(str(file_path)),
+            ],
+        )
+    ]
+    try:
+        print(f"Created temporary file: {file_path}")
+        print_input("Sending file input:", input_data)
+        result = await agent.run(input_data)
+        print_result_details(result)
+        ensure("teal" in result.output_text.lower(), "File analysis did not identify teal from the PDF.")
+    finally:
+        await agent.aclose()
+        file_path.unlink(missing_ok=True)
+
+
 async def run_streaming() -> None:
     agent = Agent(config=make_config())
     saw_delta = False
@@ -556,6 +636,7 @@ async def main() -> None:
         await run_check("Parallel Tool Calls", run_parallel_tool_calls),
         await run_check("Chat History", run_chat_history),
         await run_check("Chat Persistence", run_chat_persistence),
+        await run_check("File Input", run_file_input),
         await run_check("Streaming", run_streaming),
         await run_check("Image Structured Output", run_image_structured_output),
         await run_check("Chat With Image Follow-Up", run_chat_with_image_follow_up),

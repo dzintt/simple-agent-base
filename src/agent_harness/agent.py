@@ -18,6 +18,7 @@ from agent_harness.types import (
     AgentRunResult,
     ChatMessage,
     ChatSnapshot,
+    FilePart,
     ImagePart,
     MessageInput,
     TextPart,
@@ -376,8 +377,8 @@ class Agent:
                 continue
 
             text_parts: list[str] = []
-            content_parts: list[TextPart | ImagePart] = []
-            saw_image = False
+            content_parts: list[TextPart | ImagePart | FilePart] = []
+            saw_rich_content = False
 
             if isinstance(content_value, str):
                 text_parts.append(content_value)
@@ -397,9 +398,20 @@ class Agent:
                         detail = block.get("detail", "auto")
                         if isinstance(image_url, str) and isinstance(detail, str):
                             content_parts.append(ImagePart(image_url=image_url, detail=detail))
-                            saw_image = True
+                            saw_rich_content = True
+                    elif block_type == "input_file":
+                        file_payload = {
+                            "file_url": block.get("file_url"),
+                            "file_data": block.get("file_data"),
+                            "filename": block.get("filename"),
+                        }
+                        try:
+                            content_parts.append(FilePart.model_validate(file_payload))
+                            saw_rich_content = True
+                        except Exception:
+                            continue
 
-            if saw_image and content_parts:
+            if saw_rich_content and content_parts:
                 messages.append(ChatMessage(role=role, content=content_parts))
             elif text_parts:
                 messages.append(ChatMessage(role=role, content="".join(text_parts)))
@@ -407,12 +419,22 @@ class Agent:
         return messages
 
     @staticmethod
-    def _content_part_to_item(part: TextPart | ImagePart) -> dict[str, Any]:
+    def _content_part_to_item(part: TextPart | ImagePart | FilePart) -> dict[str, Any]:
         if isinstance(part, TextPart):
             return {
                 "type": "input_text",
                 "text": part.text,
             }
+
+        if isinstance(part, FilePart):
+            item: dict[str, Any] = {"type": "input_file"}
+            if part.file_url is not None:
+                item["file_url"] = part.file_url
+            if part.file_data is not None:
+                item["file_data"] = part.file_data
+            if part.filename is not None:
+                item["filename"] = part.filename
+            return item
 
         return {
             "type": "input_image",
