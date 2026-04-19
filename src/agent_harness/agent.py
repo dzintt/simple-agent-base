@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Callable, Sequence
 from typing import Any
 
@@ -10,6 +11,7 @@ from agent_harness.config import AgentConfig
 from agent_harness.errors import MaxTurnsExceededError
 from agent_harness.providers.base import ConversationItem, Provider
 from agent_harness.providers.openai import OpenAIResponsesProvider
+from agent_harness.sync_utils import SyncRuntime, ensure_sync_allowed, run_sync_awaitable
 from agent_harness.tools import ToolRegistry
 from agent_harness.types import (
     AgentEvent,
@@ -35,6 +37,7 @@ class Agent:
         self.registry = tools if isinstance(tools, ToolRegistry) else ToolRegistry(tools)
         self.provider = provider or OpenAIResponsesProvider(config)
         self.system_prompt = self._clean_system_prompt(system_prompt)
+        self._sync_runtime: SyncRuntime | None = None
 
     async def run(
         self,
@@ -83,6 +86,52 @@ class Agent:
     async def aclose(self) -> None:
         await self.provider.close()
 
+    def run_sync(
+        self,
+        input_data: str | Sequence[MessageInput],
+        *,
+        response_model: type[BaseModel] | None = None,
+        system_prompt: str | None = None,
+    ) -> AgentRunResult:
+        return self._run_sync_call(
+            lambda: self.run(
+                input_data,
+                response_model=response_model,
+                system_prompt=system_prompt,
+            ),
+            api_name="run_sync()",
+            async_hint="await agent.run(...)",
+        )
+
+    def stream_sync(
+        self,
+        input_data: str | Sequence[MessageInput],
+        *,
+        response_model: type[BaseModel] | None = None,
+        system_prompt: str | None = None,
+    ):
+        return self._stream_sync_call(
+            lambda: self.stream(
+                input_data,
+                response_model=response_model,
+                system_prompt=system_prompt,
+            ),
+            api_name="stream_sync()",
+            async_hint="async for event in agent.stream(...)",
+        )
+
+    def close(self) -> None:
+        ensure_sync_allowed("close()", "await agent.aclose()")
+        if self._sync_runtime is not None:
+            try:
+                self._sync_runtime.run(lambda: self.aclose())
+            finally:
+                self._sync_runtime.close()
+                self._sync_runtime = None
+            return
+
+        run_sync_awaitable(self.aclose())
+
     async def _run_transcript(
         self,
         transcript: list[ConversationItem],
@@ -110,8 +159,7 @@ class Agent:
                     raw_responses=raw_responses,
                 )
 
-            for call in response.tool_calls:
-                result = await self._execute_tool(call)
+            for result in await self._execute_tool_batch(response.tool_calls):
                 tool_results.append(result)
                 transcript.append(self._tool_output_item(result))
 
@@ -161,7 +209,8 @@ class Agent:
 
                 for call in final_response.tool_calls:
                     yield AgentEvent(type="tool_call_started", tool_call=call)
-                    tool_result = await self._execute_tool(call)
+
+                for tool_result in await self._execute_tool_batch(final_response.tool_calls):
                     tool_results.append(tool_result)
                     transcript.append(self._tool_output_item(tool_result))
                     yield AgentEvent(type="tool_call_completed", tool_result=tool_result)
@@ -174,6 +223,43 @@ class Agent:
 
     async def _execute_tool(self, call: ToolCallRequest) -> ToolExecutionResult:
         return await self.registry.execute(call)
+
+    async def _execute_tool_batch(
+        self,
+        calls: Sequence[ToolCallRequest],
+    ) -> list[ToolExecutionResult]:
+        if not self.config.parallel_tool_calls:
+            results: list[ToolExecutionResult] = []
+            for call in calls:
+                results.append(await self._execute_tool(call))
+            return results
+
+        return list(await asyncio.gather(*(self._execute_tool(call) for call in calls)))
+
+    def _run_sync_call(
+        self,
+        awaitable_factory: Callable[[], Any],
+        *,
+        api_name: str,
+        async_hint: str,
+    ) -> Any:
+        ensure_sync_allowed(api_name, async_hint)
+        return self._get_sync_runtime().run(awaitable_factory)
+
+    def _stream_sync_call(
+        self,
+        async_iterable_factory: Callable[[], AsyncIterator[AgentEvent]],
+        *,
+        api_name: str,
+        async_hint: str,
+    ):
+        ensure_sync_allowed(api_name, async_hint)
+        return self._get_sync_runtime().iterate(async_iterable_factory)
+
+    def _get_sync_runtime(self) -> SyncRuntime:
+        if self._sync_runtime is None:
+            self._sync_runtime = SyncRuntime()
+        return self._sync_runtime
 
     @staticmethod
     def _user_message(prompt: str) -> dict[str, Any]:

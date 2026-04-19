@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import tempfile
 import zlib
 import struct
@@ -26,10 +27,37 @@ class CheckResult(BaseModel):
     error: str | None = None
 
 
+PARALLEL_TOOL_EVENTS: list[tuple[str, str, float]] = []
+
+
 @tool
 async def ping_tool(message: str) -> str:
     """Echo a message back with a fixed prefix."""
     return f"pong: {message}"
+
+
+@tool
+def sync_ping_tool(message: str) -> str:
+    """Echo a message back synchronously with a fixed prefix."""
+    return f"sync-pong: {message}"
+
+
+@tool
+async def slow_tool_a(message: str) -> str:
+    """Return a labeled message after a short delay."""
+    PARALLEL_TOOL_EVENTS.append(("slow_tool_a", "start", time.perf_counter()))
+    await asyncio.sleep(0.75)
+    PARALLEL_TOOL_EVENTS.append(("slow_tool_a", "end", time.perf_counter()))
+    return f"a:{message}"
+
+
+@tool
+async def slow_tool_b(message: str) -> str:
+    """Return a labeled message after a short delay."""
+    PARALLEL_TOOL_EVENTS.append(("slow_tool_b", "start", time.perf_counter()))
+    await asyncio.sleep(0.75)
+    PARALLEL_TOOL_EVENTS.append(("slow_tool_b", "end", time.perf_counter()))
+    return f"b:{message}"
 
 
 def section(title: str) -> None:
@@ -265,6 +293,93 @@ async def run_tool_call() -> None:
         await agent.aclose()
 
 
+def _run_sync_usage_blocking() -> None:
+    agent = Agent(config=make_config(), tools=[sync_ping_tool])
+    try:
+        prompt = "Call sync_ping_tool with the message 'sync-live-test'. Then tell me the tool result."
+        print_input("Sending sync prompt:", prompt)
+        print("Registered sync tools:")
+        print("- sync_ping_tool(message: str) -> str")
+        result = agent.run_sync(prompt)
+        print_result_details(result)
+        ensure(len(result.tool_results) == 1, "Expected one sync tool result.")
+        ensure(result.tool_results[0].output == "sync-pong: sync-live-test", "Unexpected sync tool output.")
+
+        print()
+        streaming_prompt = "Explain sync wrappers in one short sentence."
+        print_input("Sending sync streaming prompt:", streaming_prompt)
+        print("Sync streaming events:")
+        saw_delta = False
+        final_text = None
+        for event in agent.stream_sync(streaming_prompt):
+            if event.type == "text_delta" and event.delta:
+                saw_delta = True
+                print(f"- delta: {event.delta}")
+            elif event.type == "completed" and event.result is not None:
+                final_text = event.result.output_text
+                print("Completed event received.")
+                print_result_details(event.result)
+            elif event.type == "error" and event.error:
+                print(f"- error: {event.error}")
+        ensure(saw_delta, "Sync streaming did not emit any text deltas.")
+        ensure(final_text is not None and final_text.strip(), "Sync streaming did not produce a final result.")
+    finally:
+        agent.close()
+
+
+async def run_sync_usage() -> None:
+    await asyncio.to_thread(_run_sync_usage_blocking)
+
+
+async def run_parallel_tool_calls() -> None:
+    base_config = make_config()
+    agent = Agent(
+        config=AgentConfig(
+            model=base_config.model,
+            api_key=base_config.api_key,
+            base_url=base_config.base_url,
+            max_turns=base_config.max_turns,
+            parallel_tool_calls=True,
+            temperature=base_config.temperature,
+            timeout=base_config.timeout,
+        ),
+        tools=[slow_tool_a, slow_tool_b],
+    )
+    prompt = (
+        "Call slow_tool_a with the message 'alpha' and slow_tool_b with the message 'beta'. "
+        "Then tell me both tool results."
+    )
+    try:
+        print_input("Sending prompt:", prompt)
+        print("Registered tools:")
+        print("- slow_tool_a(message: str) -> str")
+        print("- slow_tool_b(message: str) -> str")
+        print("- parallel_tool_calls: enabled")
+        PARALLEL_TOOL_EVENTS.clear()
+        start = time.perf_counter()
+        result = await agent.run(prompt)
+        elapsed = time.perf_counter() - start
+        print_result_details(result)
+        print(f"- elapsed_seconds: {elapsed:.3f}")
+        print(f"- tool_events: {PARALLEL_TOOL_EVENTS}")
+        ensure(len(result.tool_results) == 2, "Expected exactly two tool results in the parallel batch.")
+        ensure(result.tool_results[0].output == "a:alpha", "Unexpected output from slow_tool_a.")
+        ensure(result.tool_results[1].output == "b:beta", "Unexpected output from slow_tool_b.")
+        ensure(len(PARALLEL_TOOL_EVENTS) == 4, "Did not capture the expected tool execution events.")
+        event_lookup = {(tool_name, phase): timestamp for tool_name, phase, timestamp in PARALLEL_TOOL_EVENTS}
+        overlap_span = max(
+            event_lookup[("slow_tool_a", "end")],
+            event_lookup[("slow_tool_b", "end")],
+        ) - min(
+            event_lookup[("slow_tool_a", "start")],
+            event_lookup[("slow_tool_b", "start")],
+        )
+        print(f"- observed_tool_batch_seconds: {overlap_span:.3f}")
+        ensure(overlap_span < 1.25, "Tool batch did not overlap enough to indicate parallel execution.")
+    finally:
+        await agent.aclose()
+
+
 async def run_chat_history() -> None:
     agent = Agent(config=make_config())
     chat = agent.chat()
@@ -376,7 +491,9 @@ async def main() -> None:
         await run_check("Plain Text", run_plain_text),
         await run_check("Structured Output", run_structured_output),
         await run_check("System Prompt", run_system_prompt),
+        await run_check("Sync Usage", run_sync_usage),
         await run_check("Tool Call", run_tool_call),
+        await run_check("Parallel Tool Calls", run_parallel_tool_calls),
         await run_check("Chat History", run_chat_history),
         await run_check("Streaming", run_streaming),
         await run_check("Image Structured Output", run_image_structured_output),

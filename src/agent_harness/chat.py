@@ -86,3 +86,37 @@ class ChatSession:
         if cleaned is not None:
             return cleaned
         return self._system_prompt
+
+    def run_sync(
+        self,
+        input_data: str | Sequence[MessageInput],
+        *,
+        response_model: type[BaseModel] | None = None,
+        system_prompt: str | None = None,
+    ) -> AgentRunResult:
+        return self._agent._run_sync_call(
+            lambda: self.run(
+                input_data,
+                response_model=response_model,
+                system_prompt=system_prompt,
+            ),
+            api_name="run_sync()",
+            async_hint="await chat.run(...)",
+        )
+
+    def stream_sync(
+        self,
+        input_data: str | Sequence[MessageInput],
+        *,
+        response_model: type[BaseModel] | None = None,
+        system_prompt: str | None = None,
+    ):
+        return self._agent._stream_sync_call(
+            lambda: self.stream(
+                input_data,
+                response_model=response_model,
+                system_prompt=system_prompt,
+            ),
+            api_name="stream_sync()",
+            async_hint="async for event in chat.stream(...)",
+        )

@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from typing import Any
 
 from .base import TOOL_DEFINITION_ATTR, TOOL_METADATA_ATTR, build_tool_definition, extract_description
 
 
 def tool(
-    func: Callable[..., Awaitable[Any]] | None = None,
+    func: Callable[..., Any] | None = None,
     *,
     name: str | None = None,
     description: str | None = None,
-) -> Callable[..., Awaitable[Any]] | Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]:
-    def decorator(inner: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
+) -> Callable[..., Any] | Callable[[Callable[..., Any]], Callable[..., Any]]:
+    def decorator(inner: Callable[..., Any]) -> Callable[..., Any]:
         setattr(
             inner,
             TOOL_METADATA_ATTR,

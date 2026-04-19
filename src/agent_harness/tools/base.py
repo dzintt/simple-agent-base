@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, create_model
@@ -14,13 +14,13 @@ TOOL_DEFINITION_ATTR = "__agent_harness_tool_definition__"
 TOOL_METADATA_ATTR = "__agent_harness_tool_metadata__"
 
 
-def extract_description(func: Callable[..., Awaitable[Any]]) -> str:
+def extract_description(func: Callable[..., Any]) -> str:
     doc = inspect.getdoc(func) or ""
     first_line = doc.strip().splitlines()[0].strip() if doc.strip() else ""
     return first_line or f"Run the {func.__name__} tool."
 
 
-def build_arguments_model(func: Callable[..., Awaitable[Any]]) -> type[BaseModel]:
+def build_arguments_model(func: Callable[..., Any]) -> type[BaseModel]:
     signature = inspect.signature(func)
     fields: dict[str, tuple[Any, Any]] = {}
 
@@ -44,10 +44,7 @@ def build_arguments_model(func: Callable[..., Awaitable[Any]]) -> type[BaseModel
     )
 
 
-def build_tool_definition(func: Callable[..., Awaitable[Any]]) -> ToolDefinition:
-    if not inspect.iscoroutinefunction(func):
-        raise ToolDefinitionError(f"Tool '{func.__name__}' must be declared with 'async def'.")
-
+def build_tool_definition(func: Callable[..., Any]) -> ToolDefinition:
     metadata = getattr(func, TOOL_METADATA_ATTR, {})
     description = metadata.get("description") or extract_description(func)
     name = metadata.get("name") or func.__name__
@@ -60,6 +57,7 @@ def build_tool_definition(func: Callable[..., Awaitable[Any]]) -> ToolDefinition
         parameters=parameters,
         func=func,
         arguments_model=arguments_model,
+        is_async=inspect.iscoroutinefunction(func),
     )
 
 

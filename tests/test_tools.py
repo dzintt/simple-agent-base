@@ -10,20 +10,28 @@ async def sample_tool(name: str, count: int = 1) -> str:
     return f"{name}:{count}"
 
 
+@tool
+def sync_sample_tool(name: str) -> str:
+    """Return a greeting from a sync tool."""
+    return f"sync:{name}"
+
+
 def test_decorator_accepts_valid_async_function() -> None:
     registry = ToolRegistry([sample_tool])
     definition = registry.get("sample_tool")
 
     assert definition.name == "sample_tool"
     assert definition.description == "Return a simple greeting."
+    assert definition.is_async is True
 
 
-def test_non_async_function_is_rejected() -> None:
-    with pytest.raises(ToolDefinitionError):
+def test_decorator_accepts_valid_sync_function() -> None:
+    registry = ToolRegistry([sync_sample_tool])
+    definition = registry.get("sync_sample_tool")
 
-        @tool
-        def invalid_tool(name: str) -> str:
-            return name
+    assert definition.name == "sync_sample_tool"
+    assert definition.description == "Return a greeting from a sync tool."
+    assert definition.is_async is False
 
 
 def test_missing_annotations_are_rejected() -> None:

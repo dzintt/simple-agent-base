@@ -19,5 +19,6 @@ class AgentConfig(BaseSettings):
         validation_alias=AliasChoices("base_url", "OPENAI_BASE_URL"),
     )
     max_turns: int = Field(default=8, ge=1)
+    parallel_tool_calls: bool = False
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     timeout: float | None = Field(default=None, gt=0.0)

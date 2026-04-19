@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import time
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 from typing import Any
@@ -48,6 +50,15 @@ class FakeProvider:
         return None
 
 
+class ClosableFakeProvider(FakeProvider):
+    def __init__(self, responses: list[ProviderResponse]) -> None:
+        super().__init__(responses)
+        self.closed = False
+
+    async def close(self) -> None:
+        self.closed = True
+
+
 @tool
 async def ping(message: str) -> str:
     """Echo a message back."""
@@ -58,6 +69,25 @@ async def ping(message: str) -> str:
 async def uppercase(value: str) -> str:
     """Uppercase a value."""
     return value.upper()
+
+
+@tool
+async def slow_ping(message: str) -> str:
+    """Echo a message back after a short delay."""
+    await asyncio.sleep(0.05)
+    return f"pong: {message}"
+
+
+@tool
+def sync_ping(message: str) -> str:
+    """Echo a message back synchronously."""
+    return f"sync-pong: {message}"
+
+
+@tool
+def sync_explode(message: str) -> str:
+    """Always fail synchronously."""
+    raise ValueError(message)
 
 
 @tool
@@ -102,6 +132,86 @@ async def test_run_without_tools_returns_plain_text() -> None:
     assert result.output_text == "hello world"
     assert result.output_data is None
     assert result.tool_results == []
+
+
+def test_run_sync_returns_plain_text() -> None:
+    provider = FakeProvider(
+        [
+            ProviderResponse(
+                response_id="resp_1",
+                output_text="hello world",
+                output_items=[],
+                raw_response={"id": "resp_1"},
+            )
+        ]
+    )
+    agent = Agent(config=AgentConfig(model="gpt-5"), provider=provider)
+
+    result = agent.run_sync("Say hello.")
+
+    assert result.output_text == "hello world"
+
+
+def test_close_wraps_aclose() -> None:
+    provider = ClosableFakeProvider([])
+    agent = Agent(config=AgentConfig(model="gpt-5"), provider=provider)
+
+    agent.close()
+
+    assert provider.closed is True
+
+
+@pytest.mark.asyncio
+async def test_run_sync_raises_inside_running_event_loop() -> None:
+    agent = Agent(config=AgentConfig(model="gpt-5"), provider=FakeProvider([]))
+
+    with pytest.raises(RuntimeError, match="run_sync\\(\\) cannot be used inside a running event loop"):
+        agent.run_sync("Say hello.")
+
+
+def test_chat_session_run_sync_preserves_history() -> None:
+    provider = FakeProvider(
+        [
+            ProviderResponse(
+                response_id="resp_1",
+                output_text="Stored.",
+                output_items=[
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "Stored."}],
+                    }
+                ],
+                raw_response={"id": "resp_1"},
+            ),
+            ProviderResponse(
+                response_id="resp_2",
+                output_text="You said Anson.",
+                output_items=[
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "You said Anson."}],
+                    }
+                ],
+                raw_response={"id": "resp_2"},
+            ),
+        ]
+    )
+    agent = Agent(config=AgentConfig(model="gpt-5"), provider=provider)
+    chat = agent.chat()
+
+    first = chat.run_sync("My name is Anson.")
+    second = chat.run_sync("What name did I say?")
+
+    assert first.output_text == "Stored."
+    assert second.output_text == "You said Anson."
+    assert chat.history == [
+        ChatMessage(role="user", content="My name is Anson."),
+        ChatMessage(role="assistant", content="Stored."),
+        ChatMessage(role="user", content="What name did I say?"),
+        ChatMessage(role="assistant", content="You said Anson."),
+    ]
 
 
 @pytest.mark.asyncio
@@ -417,6 +527,102 @@ async def test_run_executes_multiple_sequential_tool_calls() -> None:
 
 
 @pytest.mark.asyncio
+async def test_parallel_tool_batch_executes_concurrently_when_enabled() -> None:
+    provider = FakeProvider(
+        [
+            ProviderResponse(
+                response_id="resp_1",
+                tool_calls=[
+                    {
+                        "call_id": "call_1",
+                        "name": "slow_ping",
+                        "arguments": {"message": "alpha"},
+                        "raw_arguments": '{"message":"alpha"}',
+                    },
+                    {
+                        "call_id": "call_2",
+                        "name": "slow_ping",
+                        "arguments": {"message": "beta"},
+                        "raw_arguments": '{"message":"beta"}',
+                    },
+                ],
+                output_items=[],
+                raw_response={"id": "resp_1"},
+            ),
+            ProviderResponse(
+                response_id="resp_2",
+                output_text="done",
+                output_items=[],
+                raw_response={"id": "resp_2"},
+            ),
+        ]
+    )
+    agent = Agent(
+        config=AgentConfig(model="gpt-5", parallel_tool_calls=True),
+        tools=[slow_ping],
+        provider=provider,
+    )
+
+    start = time.perf_counter()
+    result = await agent.run("Use the slow tool twice.")
+    elapsed = time.perf_counter() - start
+
+    assert result.output_text == "done"
+    assert [tool_result.output for tool_result in result.tool_results] == ["pong: alpha", "pong: beta"]
+    assert provider.calls[1]["input_items"][-2:] == [
+        {"type": "function_call_output", "call_id": "call_1", "output": "pong: alpha"},
+        {"type": "function_call_output", "call_id": "call_2", "output": "pong: beta"},
+    ]
+    assert elapsed < 0.09
+
+
+@pytest.mark.asyncio
+async def test_parallel_tool_batch_remains_sequential_by_default() -> None:
+    provider = FakeProvider(
+        [
+            ProviderResponse(
+                response_id="resp_1",
+                tool_calls=[
+                    {
+                        "call_id": "call_1",
+                        "name": "slow_ping",
+                        "arguments": {"message": "alpha"},
+                        "raw_arguments": '{"message":"alpha"}',
+                    },
+                    {
+                        "call_id": "call_2",
+                        "name": "slow_ping",
+                        "arguments": {"message": "beta"},
+                        "raw_arguments": '{"message":"beta"}',
+                    },
+                ],
+                output_items=[],
+                raw_response={"id": "resp_1"},
+            ),
+            ProviderResponse(
+                response_id="resp_2",
+                output_text="done",
+                output_items=[],
+                raw_response={"id": "resp_2"},
+            ),
+        ]
+    )
+    agent = Agent(
+        config=AgentConfig(model="gpt-5"),
+        tools=[slow_ping],
+        provider=provider,
+    )
+
+    start = time.perf_counter()
+    result = await agent.run("Use the slow tool twice.")
+    elapsed = time.perf_counter() - start
+
+    assert result.output_text == "done"
+    assert [tool_result.output for tool_result in result.tool_results] == ["pong: alpha", "pong: beta"]
+    assert elapsed >= 0.09
+
+
+@pytest.mark.asyncio
 async def test_max_turns_exceeded_raises_error() -> None:
     provider = FakeProvider(
         [
@@ -468,6 +674,64 @@ async def test_tool_errors_surface_as_tool_execution_errors() -> None:
 
     with pytest.raises(ToolExecutionError):
         await agent.run("Fail.")
+
+
+@pytest.mark.asyncio
+async def test_sync_tool_definition_executes_successfully() -> None:
+    provider = FakeProvider(
+        [
+            ProviderResponse(
+                response_id="resp_1",
+                output_text="",
+                tool_calls=[
+                    {
+                        "call_id": "call_1",
+                        "name": "sync_ping",
+                        "arguments": {"message": "hello"},
+                        "raw_arguments": '{"message":"hello"}',
+                    }
+                ],
+                output_items=[],
+                raw_response={"id": "resp_1"},
+            ),
+            ProviderResponse(
+                response_id="resp_2",
+                output_text="done",
+                output_items=[],
+                raw_response={"id": "resp_2"},
+            ),
+        ]
+    )
+    agent = Agent(config=AgentConfig(model="gpt-5"), tools=[sync_ping], provider=provider)
+
+    result = await agent.run("Use the sync tool.")
+
+    assert [tool_result.output for tool_result in result.tool_results] == ["sync-pong: hello"]
+
+
+@pytest.mark.asyncio
+async def test_sync_tool_errors_surface_as_tool_execution_errors() -> None:
+    provider = FakeProvider(
+        [
+            ProviderResponse(
+                response_id="resp_1",
+                tool_calls=[
+                    {
+                        "call_id": "call_1",
+                        "name": "sync_explode",
+                        "arguments": {"message": "boom"},
+                        "raw_arguments": '{"message":"boom"}',
+                    }
+                ],
+                output_items=[],
+                raw_response={"id": "resp_1"},
+            )
+        ]
+    )
+    agent = Agent(config=AgentConfig(model="gpt-5"), tools=[sync_explode], provider=provider)
+
+    with pytest.raises(ToolExecutionError):
+        await agent.run("Fail with sync tool.")
 
 
 @pytest.mark.asyncio
@@ -621,6 +885,91 @@ async def test_run_returns_structured_output_after_tool_call() -> None:
     assert [tool_result.output for tool_result in result.tool_results] == ["pong: weather"]
     assert provider.calls[0]["response_model"] is WeatherAnswer
     assert provider.calls[1]["response_model"] is WeatherAnswer
+
+
+@pytest.mark.asyncio
+async def test_parallel_tool_batch_supports_structured_output_after_tools() -> None:
+    weather = WeatherAnswer(city="San Francisco", temperature_f=65, summary="Foggy")
+    provider = FakeProvider(
+        [
+            ProviderResponse(
+                response_id="resp_1",
+                tool_calls=[
+                    {
+                        "call_id": "call_1",
+                        "name": "slow_ping",
+                        "arguments": {"message": "alpha"},
+                        "raw_arguments": '{"message":"alpha"}',
+                    },
+                    {
+                        "call_id": "call_2",
+                        "name": "slow_ping",
+                        "arguments": {"message": "beta"},
+                        "raw_arguments": '{"message":"beta"}',
+                    },
+                ],
+                output_items=[],
+                raw_response={"id": "resp_1"},
+            ),
+            ProviderResponse(
+                response_id="resp_2",
+                output_text='{"city":"San Francisco","temperature_f":65,"summary":"Foggy"}',
+                output_data=weather,
+                output_items=[],
+                raw_response={"id": "resp_2"},
+            ),
+        ]
+    )
+    agent = Agent(
+        config=AgentConfig(model="gpt-5", parallel_tool_calls=True),
+        tools=[slow_ping],
+        provider=provider,
+    )
+
+    result = await agent.run(
+        "Use the tools and return a structured weather answer.",
+        response_model=WeatherAnswer,
+    )
+
+    assert result.output_data == weather
+    assert [tool_result.output for tool_result in result.tool_results] == ["pong: alpha", "pong: beta"]
+    assert provider.calls[0]["response_model"] is WeatherAnswer
+    assert provider.calls[1]["response_model"] is WeatherAnswer
+
+
+@pytest.mark.asyncio
+async def test_parallel_tool_batch_failure_fails_run() -> None:
+    provider = FakeProvider(
+        [
+            ProviderResponse(
+                response_id="resp_1",
+                tool_calls=[
+                    {
+                        "call_id": "call_1",
+                        "name": "slow_ping",
+                        "arguments": {"message": "alpha"},
+                        "raw_arguments": '{"message":"alpha"}',
+                    },
+                    {
+                        "call_id": "call_2",
+                        "name": "explode",
+                        "arguments": {"message": "boom"},
+                        "raw_arguments": '{"message":"boom"}',
+                    },
+                ],
+                output_items=[],
+                raw_response={"id": "resp_1"},
+            )
+        ]
+    )
+    agent = Agent(
+        config=AgentConfig(model="gpt-5", parallel_tool_calls=True),
+        tools=[slow_ping, explode],
+        provider=provider,
+    )
+
+    with pytest.raises(ToolExecutionError):
+        await agent.run("Fail with parallel tools.")
 
 
 @pytest.mark.asyncio

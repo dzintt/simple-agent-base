@@ -12,8 +12,10 @@ The package exposes a minimal public API:
 It is designed for:
 
 - async execution with `AsyncOpenAI`
+- explicit sync wrappers for non-async users
 - simple decorator-based tool definitions
 - sequential local tool execution
+- optional parallel tool execution
 - streaming text deltas through an async iterator
 - trivial structured outputs with Pydantic models
 
@@ -25,10 +27,13 @@ You can:
 
 - create an `Agent`
 - give the agent a first-class `system_prompt`
-- register async tools with `@tool`
+- register tools with `@tool`
+- use either async or explicit sync entrypoints
 - call `await agent.run(...)` for a normal request
+- call `agent.run_sync(...)` in normal synchronous scripts
 - call `await agent.run([...messages...])` when you already have explicit conversation history
 - create `chat = agent.chat()` for persistent follow-up conversations
+- opt into parallel tool execution with one config flag
 - call `await agent.run(..., response_model=MySchema)` for structured output
 - call `agent.stream(...)` for incremental text and a final structured result
 
@@ -126,6 +131,82 @@ Notes:
 - `system_prompt` is the convenience path
 - advanced users can still pass explicit `ChatMessage(role="system", ...)` or `ChatMessage(role="developer", ...)`
 - if you pass both, the harness sends both and does not deduplicate them
+
+## Sync Usage
+
+The harness is async-first internally, but it also exposes explicit sync wrappers for users who do not want to work with `asyncio`.
+
+### Smallest sync run example
+
+```python
+from agent_harness import Agent, AgentConfig
+
+agent = Agent(config=AgentConfig(model="gpt-5"))
+
+result = agent.run_sync("Say hello.")
+print(result.output_text)
+agent.close()
+```
+
+### Sync streaming example
+
+```python
+for event in agent.stream_sync("Explain async IO in one sentence."):
+    if event.type == "text_delta":
+        print(event.delta, end="")
+```
+
+### Sync tool example
+
+```python
+from agent_harness import tool
+
+@tool
+def ping(message: str) -> str:
+    return f"pong: {message}"
+```
+
+Important:
+
+- `run_sync()` and `stream_sync()` are for normal synchronous scripts and apps
+- they cannot be called from inside an already-running event loop
+- in async apps, use `await agent.run(...)` and `async for event in agent.stream(...)`
+
+## Parallel Tool Calls
+
+Tool execution is sequential by default.
+
+If your tools are independent and safe to run concurrently, you can enable parallel tool handling with one config flag:
+
+```python
+agent = Agent(
+    config=AgentConfig(
+        model="gpt-5",
+        parallel_tool_calls=True,
+    ),
+    tools=[get_weather, get_news],
+)
+```
+
+When enabled:
+
+- the harness sends `parallel_tool_calls=True` to the Responses API
+- if the model returns multiple tool calls in the same turn, the harness executes them concurrently
+- tool outputs are still appended back to the transcript in deterministic order
+
+Use this only when your tools are independent and safe to run concurrently. The harness does not try to infer that for you.
+
+Good candidates:
+
+- weather + news + stock lookups
+- independent API fetches
+- read-only database queries
+
+Risky candidates:
+
+- create invoice + send invoice email
+- checkout + send receipt
+- any order-dependent or side-effectful workflow
 
 ## Images
 
@@ -241,8 +322,11 @@ It does not include the convenience `system_prompt` unless you explicitly passed
 Available examples:
 
 - [basic_agent.py](/C:/Users/Anson/Desktop/agent-harness-base/examples/basic_agent.py): smallest possible agent with one tool
+- [sync_agent.py](/C:/Users/Anson/Desktop/agent-harness-base/examples/sync_agent.py): smallest sync `run_sync(...)` flow with explicit `close()`
+- [sync_streaming.py](/C:/Users/Anson/Desktop/agent-harness-base/examples/sync_streaming.py): sync iteration over streaming events
 - [chat_session.py](/C:/Users/Anson/Desktop/agent-harness-base/examples/chat_session.py): persistent conversation history for follow-up chat apps
 - [system_prompt.py](/C:/Users/Anson/Desktop/agent-harness-base/examples/system_prompt.py): first-class system prompt defaults and one-off overrides
+- [parallel_tools.py](/C:/Users/Anson/Desktop/agent-harness-base/examples/parallel_tools.py): opt into concurrent same-turn tool execution
 - [image_input.py](/C:/Users/Anson/Desktop/agent-harness-base/examples/image_input.py): one-turn multimodal input with text plus an image
 - [chat_with_images.py](/C:/Users/Anson/Desktop/agent-harness-base/examples/chat_with_images.py): follow-up chat after sending an image
 - [structured_output.py](/C:/Users/Anson/Desktop/agent-harness-base/examples/structured_output.py): extract typed data with a Pydantic schema
@@ -365,24 +449,25 @@ async for event in chat.stream("Follow up on that"):
 
 ## Tools
 
-Tools are async functions decorated with `@tool`:
+Tools are functions decorated with `@tool`:
 
 ```python
 from agent_harness import tool
 
 
 @tool
-async def lookup_user(user_id: int) -> str:
+def lookup_user(user_id: int) -> str:
     """Return a serialized user record."""
     return '{"id": 1, "name": "Ada"}'
 ```
 
 Tool rules:
 
-- tools must use `async def`
+- tools can use either `async def` or normal `def`
 - every parameter must have a type annotation
 - the tool description comes from the first line of the docstring
-- tools are executed sequentially
+- tools are executed sequentially by default
+- set `AgentConfig(parallel_tool_calls=True)` if your tool set is safe for concurrent execution
 
 You can pass tools as a list:
 
@@ -402,9 +487,14 @@ An `OPENAI_MODEL` value can also be used as a convenience when creating `AgentCo
 ## API Summary
 
 - `Agent(config, tools=None, provider=None, system_prompt=None)`: main entrypoint
+- `AgentConfig(parallel_tool_calls=False)`: sequential by default, optional same-turn concurrent tool execution
 - `await agent.run(input_data, response_model=None, system_prompt=None)`: final result API for one message or many
+- `agent.run_sync(input_data, response_model=None, system_prompt=None)`: sync wrapper for normal scripts
 - `agent.stream(input_data, response_model=None, system_prompt=None)`: streaming API for one message or many
+- `agent.stream_sync(input_data, response_model=None, system_prompt=None)`: sync wrapper around streaming events
+- `agent.close()`: sync wrapper for `aclose()`
 - `agent.chat(messages=None, system_prompt=None)`: create a persistent chat session with in-memory history
+- `chat.run_sync(...)` / `chat.stream_sync(...)`: sync chat session wrappers
 - `AgentConfig(...)`: runtime configuration
 - `ChatMessage(role, content)`: simple message type for explicit conversation history
 - `TextPart(...)`: text content inside a multimodal message

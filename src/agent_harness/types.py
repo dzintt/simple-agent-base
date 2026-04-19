@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import mimetypes
 from pathlib import Path
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal
 
@@ -15,8 +15,9 @@ class ToolDefinition:
     name: str
     description: str
     parameters: dict[str, Any]
-    func: Callable[..., Awaitable[Any]] = field(repr=False)
+    func: Callable[..., Any] = field(repr=False)
     arguments_model: type[BaseModel] = field(repr=False)
+    is_async: bool = False
     strict: bool = True
 
 

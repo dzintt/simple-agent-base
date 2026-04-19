@@ -14,6 +14,14 @@ uv run python examples/basic_agent.py
   - Smallest useful agent setup
   - Good starting point when you just want tools plus plain text output
 
+- `sync_agent.py`
+  - Shows the smallest sync `run_sync(...)` flow and explicit `close()`
+  - Use this when you want to stay entirely in normal synchronous Python
+
+- `sync_streaming.py`
+  - Shows how to iterate over streaming events from sync code
+  - Use this when you want streaming output without using `asyncio`
+
 - `chat_session.py`
   - Shows how to keep follow-up message history automatically
   - Use this for chat apps and multi-turn conversations
@@ -21,6 +29,10 @@ uv run python examples/basic_agent.py
 - `system_prompt.py`
   - Shows the first-class `system_prompt` shortcut on the agent, on a chat session, and as a one-off override
   - Use this when you want behavior steering without manually prepending system or developer messages
+
+- `parallel_tools.py`
+  - Shows the single config flag for enabling parallel same-turn tool execution
+  - Use this when your tools are independent and safe to run concurrently
 
 - `image_input.py`
   - Shows the simplest multimodal prompt with text plus one image

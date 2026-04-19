@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Iterable
 from typing import Any
 
@@ -51,7 +52,10 @@ class ToolRegistry:
         try:
             validated = definition.arguments_model.model_validate(call.arguments)
             arguments = validated.model_dump(mode="python")
-            raw_output = await definition.func(**arguments)
+            if definition.is_async:
+                raw_output = await definition.func(**arguments)
+            else:
+                raw_output = await asyncio.to_thread(definition.func, **arguments)
         except Exception as exc:
             raise ToolExecutionError(f"Tool '{call.name}' failed: {exc}") from exc
 

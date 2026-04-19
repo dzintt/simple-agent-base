@@ -76,7 +76,7 @@ class OpenAIResponsesProvider:
         kwargs: dict[str, Any] = {
             "model": self._config.model,
             "input": list(input_items),
-            "parallel_tool_calls": False,
+            "parallel_tool_calls": self._config.parallel_tool_calls,
         }
 
         if tools:
