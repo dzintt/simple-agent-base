@@ -78,7 +78,7 @@ def make_config() -> AgentConfig:
 
 
 def make_red_png_file() -> Path:
-    handle = tempfile.NamedTemporaryFile(prefix="agent-harness-live-", suffix=".png", delete=False)
+    handle = tempfile.NamedTemporaryFile(prefix="simple-agent-base-live-", suffix=".png", delete=False)
     path = Path(handle.name)
     handle.write(make_solid_png(64, 64, red=255, green=0, blue=0))
     handle.close()
@@ -86,7 +86,7 @@ def make_red_png_file() -> Path:
 
 
 def make_pdf_file(text: str) -> Path:
-    handle = tempfile.NamedTemporaryFile(prefix="agent-harness-live-", suffix=".pdf", delete=False)
+    handle = tempfile.NamedTemporaryFile(prefix="simple-agent-base-live-", suffix=".pdf", delete=False)
     path = Path(handle.name)
     handle.write(make_simple_pdf(text))
     handle.close()

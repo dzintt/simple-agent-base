@@ -1,4 +1,4 @@
-# Agent Harness Base
+# Simple Agent Base
 
 Small async-first Python harness for building OpenAI-powered agents.
 
@@ -66,7 +66,7 @@ This module is the best fit when you want the middle ground:
 Use this structure when you add features or examples:
 
 ```text
-agent-harness-base/
+simple-agent-base/
 |-- src/
 |   `-- agent_harness/
 |       |-- __init__.py           # Public package exports
@@ -106,13 +106,13 @@ This repo is already structured as an installable Python package. Right now the 
 Install from GitHub with `pip`:
 
 ```bash
-python -m pip install "git+https://github.com/dzintt/agent-harness-base.git"
+python -m pip install "git+https://github.com/dzintt/simple-agent-base.git"
 ```
 
 Install from GitHub with `uv`:
 
 ```bash
-uv add "git+https://github.com/dzintt/agent-harness-base.git"
+uv add "git+https://github.com/dzintt/simple-agent-base.git"
 ```
 
 Install from a local checkout with `pip`:
@@ -145,7 +145,7 @@ Import it as:
 import agent_harness
 ```
 
-If you want users to run `pip install agent-harness-base` or `uv add agent-harness-base` without a GitHub URL, publish the built package to PyPI:
+If you want users to run `pip install simple-agent-base` or `uv add simple-agent-base` without a GitHub URL, publish the built package to PyPI:
 
 ```bash
 uv build
@@ -169,14 +169,14 @@ Minimal usage after install:
 `pip` install example:
 
 ```bash
-python -m pip install "git+https://github.com/dzintt/agent-harness-base.git"
+python -m pip install "git+https://github.com/dzintt/simple-agent-base.git"
 python -c "from agent_harness import Agent, AgentConfig; print(AgentConfig(model='gpt-5.4'))"
 ```
 
 `uv` install example:
 
 ```bash
-uv add "git+https://github.com/dzintt/agent-harness-base.git"
+uv add "git+https://github.com/dzintt/simple-agent-base.git"
 uv run python -c "from agent_harness import Agent, AgentConfig; print(AgentConfig(model='gpt-5.4'))"
 ```
 

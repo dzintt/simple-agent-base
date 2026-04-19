@@ -33,7 +33,7 @@ def run_sync_awaitable(awaitable: Awaitable[T]) -> T:
 
 
 class SyncRuntime:
-    def __init__(self, *, thread_name: str = "agent-harness-sync-runtime") -> None:
+    def __init__(self, *, thread_name: str = "simple-agent-base-sync-runtime") -> None:
         self._thread_name = thread_name
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None

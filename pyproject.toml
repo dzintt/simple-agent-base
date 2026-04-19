@@ -1,5 +1,5 @@
 [project]
-name = "agent-harness-base"
+name = "simple-agent-base"
 version = "0.1.0"
 description = "Async-first base harness for building OpenAI-powered agents."
 readme = "README.md"
@@ -17,8 +17,8 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/dzintt/agent-harness-base"
-Repository = "https://github.com/dzintt/agent-harness-base"
+Homepage = "https://github.com/dzintt/simple-agent-base"
+Repository = "https://github.com/dzintt/simple-agent-base"
 
 [dependency-groups]
 dev = [
