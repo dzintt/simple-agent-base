@@ -33,6 +33,34 @@ Use something else when you want:
 
 This repo is a reusable base layer, not an opinionated product framework.
 
+## How This Compares To Other Python Packages
+
+This repo is for teams that want more structure than the raw OpenAI SDK, but less framework than a full agent platform.
+
+Why people pick this module:
+
+- one small API for `run`, `stream`, tools, structured output, chat state, images, and files
+- OpenAI-specific behavior instead of provider abstraction layers you may not need
+- code you can read end-to-end in one sitting
+- easy to reuse across projects without adopting a bigger runtime model
+
+The tradeoff is deliberate:
+
+| If you want... | Best fit |
+|---|---|
+| direct access to the raw OpenAI API surface with minimal abstraction | OpenAI Python SDK |
+| a small OpenAI-specific harness that removes repeated agent plumbing without becoming a framework | this module |
+| OpenAI's broader code-first agent runtime with orchestration, state, approvals, and more advanced patterns | OpenAI Agents SDK |
+| a provider-agnostic typed agent framework with more built-in abstractions | PydanticAI |
+| structured outputs and validation more than agent/session orchestration | Instructor |
+| graph-based workflows, middleware, and a larger agent ecosystem | LangChain agents |
+
+This module is the best fit when you want the middle ground:
+
+- more ergonomic than writing the tool loop and message normalization yourself
+- easier to own than a larger framework
+- narrow enough that contributors can understand the whole package quickly
+
 ## Repository Layout
 
 Use this structure when you add features or examples:
@@ -73,10 +101,35 @@ Contributor guide:
 
 ## Install
 
-From the repo root:
+Install from a local checkout:
+
+```bash
+pip install .
+```
+
+Install directly from GitHub:
+
+```bash
+pip install "git+https://github.com/dzintt/agent-harness-base.git"
+```
+
+Import it as:
+
+```python
+import agent_harness
+```
+
+For local development from the repo root:
 
 ```bash
 uv sync
+```
+
+If you want users to run `pip install agent-harness-base` without the GitHub URL, publish the built package to PyPI:
+
+```bash
+uv build
+uv publish
 ```
 
 Set your API key:
