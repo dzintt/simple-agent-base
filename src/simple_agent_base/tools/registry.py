@@ -4,8 +4,8 @@ import asyncio
 from collections.abc import Callable, Iterable
 from typing import Any
 
-from agent_harness.errors import ToolExecutionError, ToolRegistrationError
-from agent_harness.types import ToolCallRequest, ToolDefinition, ToolExecutionResult
+from simple_agent_base.errors import ToolExecutionError, ToolRegistrationError
+from simple_agent_base.types import ToolCallRequest, ToolDefinition, ToolExecutionResult
 
 from .base import TOOL_DEFINITION_ATTR, build_tool_definition, dump_tool_output
 

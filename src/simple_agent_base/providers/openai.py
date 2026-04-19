@@ -7,9 +7,9 @@ from typing import Any
 from pydantic import BaseModel
 from openai import AsyncOpenAI, DefaultAioHttpClient
 
-from agent_harness.config import AgentConfig
-from agent_harness.errors import ProviderError
-from agent_harness.types import ToolCallRequest
+from simple_agent_base.config import AgentConfig
+from simple_agent_base.errors import ProviderError
+from simple_agent_base.types import ToolCallRequest
 
 from .base import ConversationItem, ProviderCompletedEvent, ProviderResponse, ProviderTextDeltaEvent
 

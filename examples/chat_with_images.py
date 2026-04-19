@@ -1,6 +1,6 @@
 import asyncio
 
-from agent_harness import Agent, AgentConfig, ChatMessage, ImagePart, TextPart
+from simple_agent_base import Agent, AgentConfig, ChatMessage, ImagePart, TextPart
 
 
 async def main() -> None:

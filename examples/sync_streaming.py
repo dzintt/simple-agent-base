@@ -1,4 +1,4 @@
-from agent_harness import Agent, AgentConfig
+from simple_agent_base import Agent, AgentConfig
 
 
 def main() -> None:

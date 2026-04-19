@@ -5,7 +5,7 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from agent_harness.types import ToolCallRequest
+from simple_agent_base.types import ToolCallRequest
 
 ConversationItem = dict[str, Any]
 

@@ -10,7 +10,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from agent_harness import Agent, AgentConfig, ChatMessage, FilePart, ImagePart, TextPart, tool
+from simple_agent_base import Agent, AgentConfig, ChatMessage, FilePart, ImagePart, TextPart, tool
 
 class Person(BaseModel):
     name: str

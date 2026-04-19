@@ -68,7 +68,7 @@ Use this structure when you add features or examples:
 ```text
 simple-agent-base/
 |-- src/
-|   `-- agent_harness/
+|   `-- simple_agent_base/
 |       |-- __init__.py           # Public package exports
 |       |-- agent.py              # Core run/stream loop
 |       |-- chat.py               # Stateful chat sessions and snapshots
@@ -93,8 +93,8 @@ simple-agent-base/
 
 Contributor guide:
 
-- put package code under `src/agent_harness/`
-- add new public APIs to `src/agent_harness/__init__.py`
+- put package code under `src/simple_agent_base/`
+- add new public APIs to `src/simple_agent_base/__init__.py`
 - add runnable usage samples under `examples/`
 - add verification scripts under `scripts/`
 - add local tests under `tests/`
@@ -142,7 +142,7 @@ uv sync --dev
 Import it as:
 
 ```python
-import agent_harness
+import simple_agent_base
 ```
 
 If you want users to run `pip install simple-agent-base` or `uv add simple-agent-base` without a GitHub URL, publish the built package to PyPI:
@@ -170,14 +170,14 @@ Minimal usage after install:
 
 ```bash
 python -m pip install "git+https://github.com/dzintt/simple-agent-base.git"
-python -c "from agent_harness import Agent, AgentConfig; print(AgentConfig(model='gpt-5.4'))"
+python -c "from simple_agent_base import Agent, AgentConfig; print(AgentConfig(model='gpt-5.4'))"
 ```
 
 `uv` install example:
 
 ```bash
 uv add "git+https://github.com/dzintt/simple-agent-base.git"
-uv run python -c "from agent_harness import Agent, AgentConfig; print(AgentConfig(model='gpt-5.4'))"
+uv run python -c "from simple_agent_base import Agent, AgentConfig; print(AgentConfig(model='gpt-5.4'))"
 ```
 
 ## Quickstart
@@ -185,7 +185,7 @@ uv run python -c "from agent_harness import Agent, AgentConfig; print(AgentConfi
 ```python
 import asyncio
 
-from agent_harness import Agent, AgentConfig, tool
+from simple_agent_base import Agent, AgentConfig, tool
 
 
 @tool
@@ -253,7 +253,7 @@ Use this guide:
 Main entrypoint.
 
 ```python
-from agent_harness import Agent, AgentConfig
+from simple_agent_base import Agent, AgentConfig
 
 agent = Agent(
     config=AgentConfig(model="gpt-5.4"),
@@ -308,7 +308,7 @@ result = await agent.run("Hello")
 Use explicit messages when you already have conversation history or need multimodal content:
 
 ```python
-from agent_harness import ChatMessage
+from simple_agent_base import ChatMessage
 
 messages = [
     ChatMessage(role="user", content="My name is Anson."),
@@ -348,7 +348,7 @@ print(result.output_text)
 ### Explicit message list
 
 ```python
-from agent_harness import ChatMessage
+from simple_agent_base import ChatMessage
 
 result = await agent.run(
     [
@@ -404,7 +404,7 @@ Important behavior:
 Define tools with `@tool`:
 
 ```python
-from agent_harness import tool
+from simple_agent_base import tool
 
 
 @tool
@@ -596,7 +596,7 @@ Notes:
 Use an explicit content list only when you need multimodal input:
 
 ```python
-from agent_harness import ChatMessage, ImagePart, TextPart
+from simple_agent_base import ChatMessage, ImagePart, TextPart
 
 result = await agent.run(
     [
@@ -631,7 +631,7 @@ Supported local image formats:
 File input uses the same multimodal message shape:
 
 ```python
-from agent_harness import ChatMessage, FilePart, TextPart
+from simple_agent_base import ChatMessage, FilePart, TextPart
 
 result = await agent.run(
     [

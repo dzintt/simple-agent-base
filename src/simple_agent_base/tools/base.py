@@ -7,11 +7,11 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, create_model
 
-from agent_harness.errors import ToolDefinitionError
-from agent_harness.types import ToolDefinition
+from simple_agent_base.errors import ToolDefinitionError
+from simple_agent_base.types import ToolDefinition
 
-TOOL_DEFINITION_ATTR = "__agent_harness_tool_definition__"
-TOOL_METADATA_ATTR = "__agent_harness_tool_metadata__"
+TOOL_DEFINITION_ATTR = "__simple_agent_base_tool_definition__"
+TOOL_METADATA_ATTR = "__simple_agent_base_tool_metadata__"
 
 
 def extract_description(func: Callable[..., Any]) -> str:

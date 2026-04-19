@@ -7,8 +7,8 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from agent_harness import Agent, AgentConfig, ChatMessage, ChatSnapshot, FilePart, ImagePart, TextPart, tool
-from agent_harness.providers.base import ConversationItem, ProviderCompletedEvent, ProviderResponse, ProviderTextDeltaEvent
+from simple_agent_base import Agent, AgentConfig, ChatMessage, ChatSnapshot, FilePart, ImagePart, TextPart, tool
+from simple_agent_base.providers.base import ConversationItem, ProviderCompletedEvent, ProviderResponse, ProviderTextDeltaEvent
 
 
 class FakeStreamingProvider:

@@ -5,11 +5,11 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
-from agent_harness.providers.base import ConversationItem
-from agent_harness.types import AgentEvent, AgentRunResult, ChatMessage, ChatSnapshot, MessageInput
+from simple_agent_base.providers.base import ConversationItem
+from simple_agent_base.types import AgentEvent, AgentRunResult, ChatMessage, ChatSnapshot, MessageInput
 
 if TYPE_CHECKING:
-    from agent_harness.agent import Agent
+    from simple_agent_base.agent import Agent
 
 
 class ChatSession:

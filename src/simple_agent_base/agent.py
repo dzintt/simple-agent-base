@@ -6,14 +6,14 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from agent_harness.chat import ChatSession
-from agent_harness.config import AgentConfig
-from agent_harness.errors import MaxTurnsExceededError
-from agent_harness.providers.base import ConversationItem, Provider
-from agent_harness.providers.openai import OpenAIResponsesProvider
-from agent_harness.sync_utils import SyncRuntime, ensure_sync_allowed, run_sync_awaitable
-from agent_harness.tools import ToolRegistry
-from agent_harness.types import (
+from simple_agent_base.chat import ChatSession
+from simple_agent_base.config import AgentConfig
+from simple_agent_base.errors import MaxTurnsExceededError
+from simple_agent_base.providers.base import ConversationItem, Provider
+from simple_agent_base.providers.openai import OpenAIResponsesProvider
+from simple_agent_base.sync_utils import SyncRuntime, ensure_sync_allowed, run_sync_awaitable
+from simple_agent_base.tools import ToolRegistry
+from simple_agent_base.types import (
     AgentEvent,
     AgentRunResult,
     ChatMessage,

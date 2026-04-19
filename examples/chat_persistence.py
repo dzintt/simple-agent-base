@@ -1,6 +1,6 @@
 import asyncio
 
-from agent_harness import Agent, AgentConfig
+from simple_agent_base import Agent, AgentConfig
 
 
 async def main() -> None:

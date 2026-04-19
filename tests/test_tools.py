@@ -1,7 +1,7 @@
 import pytest
 
-from agent_harness.errors import ToolDefinitionError, ToolRegistrationError
-from agent_harness.tools import ToolRegistry, tool
+from simple_agent_base.errors import ToolDefinitionError, ToolRegistrationError
+from simple_agent_base.tools import ToolRegistry, tool
 
 
 @tool

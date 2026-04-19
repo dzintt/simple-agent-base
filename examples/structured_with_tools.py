@@ -2,7 +2,7 @@ import asyncio
 
 from pydantic import BaseModel
 
-from agent_harness import Agent, AgentConfig, tool
+from simple_agent_base import Agent, AgentConfig, tool
 
 
 class WeatherAnswer(BaseModel):

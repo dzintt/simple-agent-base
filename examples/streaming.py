@@ -2,7 +2,7 @@ import asyncio
 
 from pydantic import BaseModel
 
-from agent_harness import Agent, AgentConfig
+from simple_agent_base import Agent, AgentConfig
 
 
 class Summary(BaseModel):
