@@ -29,18 +29,25 @@ class Agent:
         config: AgentConfig,
         tools: list[Callable[..., Any]] | ToolRegistry | None = None,
         provider: Provider | None = None,
+        system_prompt: str | None = None,
     ) -> None:
         self.config = config
         self.registry = tools if isinstance(tools, ToolRegistry) else ToolRegistry(tools)
         self.provider = provider or OpenAIResponsesProvider(config)
+        self.system_prompt = self._clean_system_prompt(system_prompt)
 
     async def run(
         self,
         input_data: str | Sequence[MessageInput],
         *,
         response_model: type[BaseModel] | None = None,
+        system_prompt: str | None = None,
     ) -> AgentRunResult:
         transcript = self._normalize_input(input_data)
+        transcript = self._prepend_system_prompt(
+            transcript,
+            system_prompt=self._resolve_system_prompt(system_prompt),
+        )
         return await self._run_transcript(transcript, response_model=response_model)
 
     async def stream(
@@ -48,16 +55,30 @@ class Agent:
         input_data: str | Sequence[MessageInput],
         *,
         response_model: type[BaseModel] | None = None,
+        system_prompt: str | None = None,
     ) -> AsyncIterator[AgentEvent]:
         transcript = self._normalize_input(input_data)
+        transcript = self._prepend_system_prompt(
+            transcript,
+            system_prompt=self._resolve_system_prompt(system_prompt),
+        )
         async for event in self._stream_transcript(transcript, response_model=response_model):
             yield event
 
-    def chat(self, messages: str | Sequence[MessageInput] | None = None) -> ChatSession:
+    def chat(
+        self,
+        messages: str | Sequence[MessageInput] | None = None,
+        *,
+        system_prompt: str | None = None,
+    ) -> ChatSession:
         initial_items: list[ConversationItem] = []
         if messages is not None:
             initial_items = self._normalize_input(messages)
-        return ChatSession(self, items=initial_items)
+        return ChatSession(
+            self,
+            items=initial_items,
+            system_prompt=self._resolve_system_prompt(system_prompt),
+        )
 
     async def aclose(self) -> None:
         await self.provider.close()
@@ -179,6 +200,56 @@ class Agent:
                 items.append(self._message_to_item(chat_message))
 
         return items
+
+    def _resolve_system_prompt(self, system_prompt: str | None) -> str | None:
+        cleaned = self._clean_system_prompt(system_prompt)
+        if cleaned is not None:
+            return cleaned
+        return self.system_prompt
+
+    @staticmethod
+    def _clean_system_prompt(system_prompt: str | None) -> str | None:
+        if system_prompt is None:
+            return None
+        cleaned = system_prompt.strip()
+        if not cleaned:
+            return None
+        return cleaned
+
+    @classmethod
+    def _prepend_system_prompt(
+        cls,
+        items: list[ConversationItem],
+        *,
+        system_prompt: str | None,
+    ) -> list[ConversationItem]:
+        if system_prompt is None:
+            return list(items)
+
+        return [
+            cls._message_to_item(ChatMessage(role="developer", content=system_prompt)),
+            *items,
+        ]
+
+    @classmethod
+    def _strip_prepended_system_prompt(
+        cls,
+        items: Sequence[ConversationItem],
+        *,
+        system_prompt: str | None,
+    ) -> list[ConversationItem]:
+        if system_prompt is None:
+            return list(items)
+
+        expected_item = cls._message_to_item(ChatMessage(role="developer", content=system_prompt))
+        result = list(items)
+        if result and result[0] == expected_item:
+            return result[1:]
+        return result
+
+    @staticmethod
+    def _persistable_items(items: Sequence[ConversationItem]) -> list[ConversationItem]:
+        return [item for item in items if item.get("type") == "message"]
 
     @staticmethod
     def _message_to_item(message: ChatMessage) -> ConversationItem:

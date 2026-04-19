@@ -94,6 +94,41 @@ async def test_stream_yields_text_delta_events() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stream_prepends_run_level_system_prompt() -> None:
+    provider = FakeStreamingProvider(
+        [
+            [
+                ProviderTextDeltaEvent(delta="Hello"),
+                ProviderCompletedEvent(
+                    response=ProviderResponse(
+                        response_id="resp_1",
+                        output_text="Hello",
+                        output_items=[],
+                        raw_response={"id": "resp_1"},
+                    )
+                ),
+            ]
+        ]
+    )
+    agent = Agent(config=AgentConfig(model="gpt-5"), provider=provider)
+
+    _ = [event async for event in agent.stream("Say hello.", system_prompt="Be concise.")]
+
+    assert provider.calls[0]["input_items"] == [
+        {
+            "type": "message",
+            "role": "developer",
+            "content": "Be concise.",
+        },
+        {
+            "type": "message",
+            "role": "user",
+            "content": "Say hello.",
+        },
+    ]
+
+
+@pytest.mark.asyncio
 async def test_stream_yields_tool_lifecycle_and_completed_events() -> None:
     provider = FakeStreamingProvider(
         [
@@ -201,6 +236,38 @@ async def test_stream_returns_structured_output_on_completed_event() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stream_uses_agent_level_system_prompt() -> None:
+    provider = FakeStreamingProvider(
+        [
+            [
+                ProviderTextDeltaEvent(delta="Hello"),
+                ProviderCompletedEvent(
+                    response=ProviderResponse(
+                        response_id="resp_1",
+                        output_text="Hello",
+                        output_items=[],
+                        raw_response={"id": "resp_1"},
+                    )
+                ),
+            ]
+        ]
+    )
+    agent = Agent(
+        config=AgentConfig(model="gpt-5"),
+        provider=provider,
+        system_prompt="Default prompt",
+    )
+
+    _ = [event async for event in agent.stream("Say hello.")]
+
+    assert provider.calls[0]["input_items"][0] == {
+        "type": "message",
+        "role": "developer",
+        "content": "Default prompt",
+    }
+
+
+@pytest.mark.asyncio
 async def test_stream_returns_structured_output_after_tool_turn() -> None:
     summary = Summary(title="Weather", bullets=["Foggy", "65F"])
     provider = FakeStreamingProvider(
@@ -256,6 +323,42 @@ async def test_stream_returns_structured_output_after_tool_turn() -> None:
     assert events[-1].result.output_data == summary
     assert provider.calls[0]["response_model"] is Summary
     assert provider.calls[1]["response_model"] is Summary
+
+
+@pytest.mark.asyncio
+async def test_stream_supports_structured_output_with_system_prompt() -> None:
+    summary = Summary(title="Hello", bullets=["one", "two"])
+    provider = FakeStreamingProvider(
+        [
+            [
+                ProviderCompletedEvent(
+                    response=ProviderResponse(
+                        response_id="resp_1",
+                        output_text='{"title":"Hello","bullets":["one","two"]}',
+                        output_data=summary,
+                        output_items=[],
+                        raw_response={"id": "resp_1"},
+                    )
+                ),
+            ]
+        ]
+    )
+    agent = Agent(
+        config=AgentConfig(model="gpt-5"),
+        provider=provider,
+        system_prompt="Return structured data.",
+    )
+
+    events = [event async for event in agent.stream("Summarize this text.", response_model=Summary)]
+
+    assert events[-1].type == "completed"
+    assert events[-1].result is not None
+    assert events[-1].result.output_data == summary
+    assert provider.calls[0]["input_items"][0] == {
+        "type": "message",
+        "role": "developer",
+        "content": "Return structured data.",
+    }
 
 
 @pytest.mark.asyncio
@@ -387,6 +490,85 @@ async def test_chat_session_stream_preserves_history_after_completion() -> None:
             "role": "user",
             "content": "What name did I say?",
         },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_chat_session_stream_uses_system_prompt_without_persisting_it() -> None:
+    provider = FakeStreamingProvider(
+        [
+            [
+                ProviderCompletedEvent(
+                    response=ProviderResponse(
+                        response_id="resp_1",
+                        output_text="Stored.",
+                        output_items=[
+                            {
+                                "type": "message",
+                                "role": "assistant",
+                                "content": [{"type": "output_text", "text": "Stored."}],
+                            }
+                        ],
+                        raw_response={"id": "resp_1"},
+                    )
+                )
+            ],
+            [
+                ProviderCompletedEvent(
+                    response=ProviderResponse(
+                        response_id="resp_2",
+                        output_text="You said Anson.",
+                        output_items=[
+                            {
+                                "type": "message",
+                                "role": "assistant",
+                                "content": [{"type": "output_text", "text": "You said Anson."}],
+                            }
+                        ],
+                        raw_response={"id": "resp_2"},
+                    )
+                )
+            ],
+        ]
+    )
+    agent = Agent(config=AgentConfig(model="gpt-5"), provider=provider)
+    chat = agent.chat(system_prompt="You are concise.")
+
+    _ = [event async for event in chat.stream("My name is Anson.")]
+    _ = [event async for event in chat.stream("What name did I say?")]
+
+    assert provider.calls[0]["input_items"][0] == {
+        "type": "message",
+        "role": "developer",
+        "content": "You are concise.",
+    }
+    assert provider.calls[1]["input_items"] == [
+        {
+            "type": "message",
+            "role": "developer",
+            "content": "You are concise.",
+        },
+        {
+            "type": "message",
+            "role": "user",
+            "content": "My name is Anson.",
+        },
+        {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Stored."}],
+        },
+        {
+            "type": "message",
+            "role": "user",
+            "content": "What name did I say?",
+        },
+    ]
+    assert chat.history == [
+        ChatMessage(role="user", content="My name is Anson."),
+        ChatMessage(role="assistant", content="Stored."),
+        ChatMessage(role="user", content="What name did I say?"),
+        ChatMessage(role="assistant", content="You said Anson."),
     ]
 
 

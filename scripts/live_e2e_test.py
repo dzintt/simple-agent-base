@@ -196,6 +196,59 @@ async def run_structured_output() -> None:
         await agent.aclose()
 
 
+async def run_system_prompt() -> None:
+    agent = Agent(
+        config=make_config(),
+        system_prompt="For the next reply, answer with exactly the text system-default-ok.",
+    )
+    default_prompt = "What should you reply with?"
+    override_prompt = "What should you reply with now?"
+    try:
+        print("Agent default system_prompt:")
+        print("- For the next reply, answer with exactly the text system-default-ok.")
+        print_input("Sending prompt:", default_prompt)
+        default_result = await agent.run(default_prompt)
+        print_result_details(default_result)
+        ensure(
+            "system-default-ok" in default_result.output_text.lower(),
+            "Agent-level system prompt did not steer the response as expected.",
+        )
+
+        print()
+        print("Per-run override system_prompt:")
+        print("- For the next reply, answer with exactly the text system-override-ok.")
+        print_input("Sending prompt:", override_prompt)
+        override_result = await agent.run(
+            override_prompt,
+            system_prompt="For the next reply, answer with exactly the text system-override-ok.",
+        )
+        print_result_details(override_result)
+        ensure(
+            "system-override-ok" in override_result.output_text.lower(),
+            "Per-run system prompt override did not steer the response as expected.",
+        )
+
+        print()
+        print("Chat session default system_prompt:")
+        print("- For every reply in this chat, answer with exactly the text chat-system-ok.")
+        chat = agent.chat(system_prompt="For every reply in this chat, answer with exactly the text chat-system-ok.")
+        chat_prompt = "What should you reply with in this chat?"
+        print_input("Sending prompt:", chat_prompt)
+        chat_result = await chat.run(chat_prompt)
+        print_result_details(chat_result)
+        print_chat_history(chat.history)
+        ensure(
+            "chat-system-ok" in chat_result.output_text.lower(),
+            "Chat session system prompt did not steer the response as expected.",
+        )
+        ensure(
+            all(message.role != "developer" for message in chat.history),
+            "System prompt leaked into chat history.",
+        )
+    finally:
+        await agent.aclose()
+
+
 async def run_tool_call() -> None:
     agent = Agent(config=make_config(), tools=[ping_tool])
     prompt = "Call the ping_tool with the message 'live-test'. Then tell me the tool result."
@@ -322,6 +375,7 @@ async def main() -> None:
     results = [
         await run_check("Plain Text", run_plain_text),
         await run_check("Structured Output", run_structured_output),
+        await run_check("System Prompt", run_system_prompt),
         await run_check("Tool Call", run_tool_call),
         await run_check("Chat History", run_chat_history),
         await run_check("Streaming", run_streaming),

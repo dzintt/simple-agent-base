@@ -24,6 +24,7 @@ This project is a small reusable base for future agent projects.
 You can:
 
 - create an `Agent`
+- give the agent a first-class `system_prompt`
 - register async tools with `@tool`
 - call `await agent.run(...)` for a normal request
 - call `await agent.run([...messages...])` when you already have explicit conversation history
@@ -69,6 +70,7 @@ async def main() -> None:
     agent = Agent(
         config=AgentConfig(model="gpt-5"),
         tools=[ping],
+        system_prompt="You are concise and helpful.",
     )
 
     result = await agent.run("Call ping with hello and tell me the result.")
@@ -84,6 +86,46 @@ The result object includes:
 - `result.output_data`: validated structured output when you pass `response_model=...`
 - `result.tool_results`: tool execution history
 - `result.raw_responses`: raw-ish provider payloads for debugging
+
+## System Prompt
+
+You can set a first-class `system_prompt` without manually constructing a message list:
+
+```python
+from agent_harness import Agent, AgentConfig
+
+agent = Agent(
+    config=AgentConfig(model="gpt-5"),
+    system_prompt="You are concise and helpful.",
+)
+
+result = await agent.run("Say hello in five words or fewer.")
+print(result.output_text)
+```
+
+You can override it for one request:
+
+```python
+result = await agent.run(
+    "Explain async IO.",
+    system_prompt="You are a teacher who explains things simply.",
+)
+```
+
+And you can give a chat session its own default prompt:
+
+```python
+chat = agent.chat(system_prompt="You are a terse coding assistant.")
+
+await chat.run("Help me prepare for a backend interview.")
+result = await chat.run("Ask me the next question.")
+```
+
+Notes:
+
+- `system_prompt` is the convenience path
+- advanced users can still pass explicit `ChatMessage(role="system", ...)` or `ChatMessage(role="developer", ...)`
+- if you pass both, the harness sends both and does not deduplicate them
 
 ## Images
 
@@ -182,7 +224,7 @@ result = await agent.run(
 Use this when you want the harness to keep the conversation history for you:
 
 ```python
-chat = agent.chat()
+chat = agent.chat(system_prompt="You are concise.")
 
 await chat.run("My name is Anson.")
 result = await chat.run("What's my name?")
@@ -192,6 +234,7 @@ print(chat.history)
 ```
 
 `chat.history` gives you a simple list of `ChatMessage` values for display or storage.
+It does not include the convenience `system_prompt` unless you explicitly passed a system or developer message yourself.
 
 ## Examples
 
@@ -199,6 +242,7 @@ Available examples:
 
 - [basic_agent.py](/C:/Users/Anson/Desktop/agent-harness-base/examples/basic_agent.py): smallest possible agent with one tool
 - [chat_session.py](/C:/Users/Anson/Desktop/agent-harness-base/examples/chat_session.py): persistent conversation history for follow-up chat apps
+- [system_prompt.py](/C:/Users/Anson/Desktop/agent-harness-base/examples/system_prompt.py): first-class system prompt defaults and one-off overrides
 - [image_input.py](/C:/Users/Anson/Desktop/agent-harness-base/examples/image_input.py): one-turn multimodal input with text plus an image
 - [chat_with_images.py](/C:/Users/Anson/Desktop/agent-harness-base/examples/chat_with_images.py): follow-up chat after sending an image
 - [structured_output.py](/C:/Users/Anson/Desktop/agent-harness-base/examples/structured_output.py): extract typed data with a Pydantic schema
@@ -357,10 +401,10 @@ An `OPENAI_MODEL` value can also be used as a convenience when creating `AgentCo
 
 ## API Summary
 
-- `Agent(config, tools=None, provider=None)`: main entrypoint
-- `await agent.run(input_data, response_model=None)`: final result API for one message or many
-- `agent.stream(input_data, response_model=None)`: streaming API for one message or many
-- `agent.chat(messages=None)`: create a persistent chat session with in-memory history
+- `Agent(config, tools=None, provider=None, system_prompt=None)`: main entrypoint
+- `await agent.run(input_data, response_model=None, system_prompt=None)`: final result API for one message or many
+- `agent.stream(input_data, response_model=None, system_prompt=None)`: streaming API for one message or many
+- `agent.chat(messages=None, system_prompt=None)`: create a persistent chat session with in-memory history
 - `AgentConfig(...)`: runtime configuration
 - `ChatMessage(role, content)`: simple message type for explicit conversation history
 - `TextPart(...)`: text content inside a multimodal message

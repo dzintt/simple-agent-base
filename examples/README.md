@@ -18,6 +18,10 @@ uv run python examples/basic_agent.py
   - Shows how to keep follow-up message history automatically
   - Use this for chat apps and multi-turn conversations
 
+- `system_prompt.py`
+  - Shows the first-class `system_prompt` shortcut on the agent, on a chat session, and as a one-off override
+  - Use this when you want behavior steering without manually prepending system or developer messages
+
 - `image_input.py`
   - Shows the simplest multimodal prompt with text plus one image
   - Use this when you want image understanding without a persistent chat session

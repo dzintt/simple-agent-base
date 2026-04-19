@@ -105,6 +105,74 @@ async def test_run_without_tools_returns_plain_text() -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_prepends_agent_level_system_prompt() -> None:
+    provider = FakeProvider(
+        [
+            ProviderResponse(
+                response_id="resp_1",
+                output_text="hello world",
+                output_items=[],
+                raw_response={"id": "resp_1"},
+            )
+        ]
+    )
+    agent = Agent(
+        config=AgentConfig(model="gpt-5"),
+        provider=provider,
+        system_prompt="You are concise.",
+    )
+
+    await agent.run("Say hello.")
+
+    assert provider.calls[0]["input_items"] == [
+        {
+            "type": "message",
+            "role": "developer",
+            "content": "You are concise.",
+        },
+        {
+            "type": "message",
+            "role": "user",
+            "content": "Say hello.",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_level_system_prompt_overrides_agent_default() -> None:
+    provider = FakeProvider(
+        [
+            ProviderResponse(
+                response_id="resp_1",
+                output_text="hello world",
+                output_items=[],
+                raw_response={"id": "resp_1"},
+            )
+        ]
+    )
+    agent = Agent(
+        config=AgentConfig(model="gpt-5"),
+        provider=provider,
+        system_prompt="Default prompt",
+    )
+
+    await agent.run("Say hello.", system_prompt="Override prompt")
+
+    assert provider.calls[0]["input_items"] == [
+        {
+            "type": "message",
+            "role": "developer",
+            "content": "Override prompt",
+        },
+        {
+            "type": "message",
+            "role": "user",
+            "content": "Say hello.",
+        },
+    ]
+
+
+@pytest.mark.asyncio
 async def test_run_accepts_multimodal_message() -> None:
     provider = FakeProvider(
         [
@@ -191,6 +259,50 @@ async def test_run_accepts_multiple_messages() -> None:
             "type": "message",
             "role": "user",
             "content": "What's my name?",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_preserves_explicit_history_alongside_system_prompt() -> None:
+    provider = FakeProvider(
+        [
+            ProviderResponse(
+                response_id="resp_1",
+                output_text="I remember the earlier messages.",
+                output_items=[],
+                raw_response={"id": "resp_1"},
+            )
+        ]
+    )
+    agent = Agent(
+        config=AgentConfig(model="gpt-5"),
+        provider=provider,
+        system_prompt="Default prompt",
+    )
+
+    await agent.run(
+        [
+            ChatMessage(role="system", content="Explicit system."),
+            ChatMessage(role="user", content="Hello."),
+        ]
+    )
+
+    assert provider.calls[0]["input_items"] == [
+        {
+            "type": "message",
+            "role": "developer",
+            "content": "Default prompt",
+        },
+        {
+            "type": "message",
+            "role": "system",
+            "content": "Explicit system.",
+        },
+        {
+            "type": "message",
+            "role": "user",
+            "content": "Hello.",
         },
     ]
 
@@ -385,6 +497,39 @@ async def test_run_returns_structured_output_without_tools() -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_supports_structured_output_with_system_prompt() -> None:
+    person = Person(name="Sarah", age=29)
+    provider = FakeProvider(
+        [
+            ProviderResponse(
+                response_id="resp_1",
+                output_text='{"name":"Sarah","age":29}',
+                output_data=person,
+                output_items=[],
+                raw_response={"id": "resp_1"},
+            )
+        ]
+    )
+    agent = Agent(
+        config=AgentConfig(model="gpt-5"),
+        provider=provider,
+        system_prompt="Return only structured data.",
+    )
+
+    result = await agent.run(
+        "Extract the person from: Sarah is 29 years old.",
+        response_model=Person,
+    )
+
+    assert result.output_data == person
+    assert provider.calls[0]["input_items"][0] == {
+        "type": "message",
+        "role": "developer",
+        "content": "Return only structured data.",
+    }
+
+
+@pytest.mark.asyncio
 async def test_run_supports_structured_output_with_image_input() -> None:
     person = Person(name="Sarah", age=29)
     provider = FakeProvider(
@@ -479,6 +624,61 @@ async def test_run_returns_structured_output_after_tool_call() -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_supports_tool_calls_with_system_prompt() -> None:
+    provider = FakeProvider(
+        [
+            ProviderResponse(
+                response_id="resp_1",
+                output_text="",
+                tool_calls=[
+                    {
+                        "call_id": "call_1",
+                        "name": "ping",
+                        "arguments": {"message": "hello"},
+                        "raw_arguments": '{"message":"hello"}',
+                    }
+                ],
+                output_items=[
+                    {
+                        "type": "function_call",
+                        "call_id": "call_1",
+                        "name": "ping",
+                        "arguments": '{"message":"hello"}',
+                    }
+                ],
+                raw_response={"id": "resp_1"},
+            ),
+            ProviderResponse(
+                response_id="resp_2",
+                output_text="The tool said pong: hello",
+                output_items=[],
+                raw_response={"id": "resp_2"},
+            ),
+        ]
+    )
+    agent = Agent(
+        config=AgentConfig(model="gpt-5"),
+        tools=[ping],
+        provider=provider,
+        system_prompt="Use tools when helpful.",
+    )
+
+    result = await agent.run("Use the tool.")
+
+    assert result.output_text == "The tool said pong: hello"
+    assert provider.calls[0]["input_items"][0] == {
+        "type": "message",
+        "role": "developer",
+        "content": "Use tools when helpful.",
+    }
+    assert provider.calls[1]["input_items"][0] == {
+        "type": "message",
+        "role": "developer",
+        "content": "Use tools when helpful.",
+    }
+
+
+@pytest.mark.asyncio
 async def test_run_surfaces_structured_provider_failures() -> None:
     class FailingStructuredProvider(FakeProvider):
         async def create_response(
@@ -560,6 +760,112 @@ async def test_chat_session_preserves_conversation_history() -> None:
         ChatMessage(role="user", content="What name did I give you?"),
         ChatMessage(role="assistant", content="You told me your name is Anson."),
     ]
+
+
+@pytest.mark.asyncio
+async def test_chat_session_uses_default_system_prompt_without_leaking_into_history() -> None:
+    provider = FakeProvider(
+        [
+            ProviderResponse(
+                response_id="resp_1",
+                output_text="Stored.",
+                output_items=[
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "Stored."}],
+                    }
+                ],
+                raw_response={"id": "resp_1"},
+            ),
+            ProviderResponse(
+                response_id="resp_2",
+                output_text="You said Anson.",
+                output_items=[
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "You said Anson."}],
+                    }
+                ],
+                raw_response={"id": "resp_2"},
+            ),
+        ]
+    )
+    agent = Agent(
+        config=AgentConfig(model="gpt-5"),
+        provider=provider,
+        system_prompt="You are concise.",
+    )
+    chat = agent.chat()
+
+    await chat.run("My name is Anson.")
+    await chat.run("What name did I say?")
+
+    assert provider.calls[0]["input_items"][0] == {
+        "type": "message",
+        "role": "developer",
+        "content": "You are concise.",
+    }
+    assert provider.calls[1]["input_items"][0] == {
+        "type": "message",
+        "role": "developer",
+        "content": "You are concise.",
+    }
+    assert chat.history == [
+        ChatMessage(role="user", content="My name is Anson."),
+        ChatMessage(role="assistant", content="Stored."),
+        ChatMessage(role="user", content="What name did I say?"),
+        ChatMessage(role="assistant", content="You said Anson."),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_chat_session_run_level_system_prompt_overrides_for_one_call_only() -> None:
+    provider = FakeProvider(
+        [
+            ProviderResponse(
+                response_id="resp_1",
+                output_text="First",
+                output_items=[
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "First"}],
+                    }
+                ],
+                raw_response={"id": "resp_1"},
+            ),
+            ProviderResponse(
+                response_id="resp_2",
+                output_text="Second",
+                output_items=[
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "Second"}],
+                    }
+                ],
+                raw_response={"id": "resp_2"},
+            ),
+        ]
+    )
+    agent = Agent(config=AgentConfig(model="gpt-5"), provider=provider)
+    chat = agent.chat(system_prompt="Session prompt")
+
+    await chat.run("Hello.", system_prompt="Override prompt")
+    await chat.run("Hello again.")
+
+    assert provider.calls[0]["input_items"][0] == {
+        "type": "message",
+        "role": "developer",
+        "content": "Override prompt",
+    }
+    assert provider.calls[1]["input_items"][0] == {
+        "type": "message",
+        "role": "developer",
+        "content": "Session prompt",
+    }
 
 
 @pytest.mark.asyncio
