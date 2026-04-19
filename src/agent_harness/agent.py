@@ -15,7 +15,9 @@ from agent_harness.types import (
     AgentEvent,
     AgentRunResult,
     ChatMessage,
+    ImagePart,
     MessageInput,
+    TextPart,
     ToolCallRequest,
     ToolExecutionResult,
 )
@@ -180,10 +182,15 @@ class Agent:
 
     @staticmethod
     def _message_to_item(message: ChatMessage) -> ConversationItem:
+        if isinstance(message.content, str):
+            content: str | list[dict[str, Any]] = message.content
+        else:
+            content = [Agent._content_part_to_item(part) for part in message.content]
+
         return {
             "type": "message",
             "role": message.role,
-            "content": message.content,
+            "content": content,
         }
 
     @staticmethod
@@ -199,9 +206,12 @@ class Agent:
             if not isinstance(role, str):
                 continue
 
-            parts: list[str] = []
+            text_parts: list[str] = []
+            content_parts: list[TextPart | ImagePart] = []
+            saw_image = False
+
             if isinstance(content_value, str):
-                parts.append(content_value)
+                text_parts.append(content_value)
             elif isinstance(content_value, list):
                 for block in content_value:
                     if not isinstance(block, dict):
@@ -211,9 +221,32 @@ class Agent:
                     if block_type in {"input_text", "output_text"}:
                         text = block.get("text")
                         if isinstance(text, str):
-                            parts.append(text)
+                            text_parts.append(text)
+                            content_parts.append(TextPart(text))
+                    elif block_type == "input_image":
+                        image_url = block.get("image_url")
+                        detail = block.get("detail", "auto")
+                        if isinstance(image_url, str) and isinstance(detail, str):
+                            content_parts.append(ImagePart(image_url=image_url, detail=detail))
+                            saw_image = True
 
-            if parts:
-                messages.append(ChatMessage(role=role, content="".join(parts)))
+            if saw_image and content_parts:
+                messages.append(ChatMessage(role=role, content=content_parts))
+            elif text_parts:
+                messages.append(ChatMessage(role=role, content="".join(text_parts)))
 
         return messages
+
+    @staticmethod
+    def _content_part_to_item(part: TextPart | ImagePart) -> dict[str, Any]:
+        if isinstance(part, TextPart):
+            return {
+                "type": "input_text",
+                "text": part.text,
+            }
+
+        return {
+            "type": "input_image",
+            "image_url": part.image_url,
+            "detail": part.detail,
+        }

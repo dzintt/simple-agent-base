@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from agent_harness import Agent, AgentConfig, ChatMessage, tool
+from agent_harness import Agent, AgentConfig, ChatMessage, ImagePart, TextPart, tool
 from agent_harness.providers.base import ConversationItem, ProviderCompletedEvent, ProviderResponse, ProviderTextDeltaEvent
 
 
@@ -386,5 +386,140 @@ async def test_chat_session_stream_preserves_history_after_completion() -> None:
             "type": "message",
             "role": "user",
             "content": "What name did I say?",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stream_accepts_multimodal_message() -> None:
+    provider = FakeStreamingProvider(
+        [
+            [
+                ProviderTextDeltaEvent(delta="cat"),
+                ProviderCompletedEvent(
+                    response=ProviderResponse(
+                        response_id="resp_1",
+                        output_text="cat",
+                        output_items=[],
+                        raw_response={"id": "resp_1"},
+                    )
+                ),
+            ]
+        ]
+    )
+    agent = Agent(config=AgentConfig(model="gpt-5"), provider=provider)
+
+    events = [
+        event
+        async for event in agent.stream(
+            [
+                ChatMessage(
+                    role="user",
+                    content=[
+                        TextPart("Describe this image."),
+                        ImagePart.from_url("https://example.com/cat.png"),
+                    ],
+                )
+            ]
+        )
+    ]
+
+    assert [event.type for event in events] == ["text_delta", "completed"]
+    assert provider.calls[0]["input_items"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Describe this image."},
+                {
+                    "type": "input_image",
+                    "image_url": "https://example.com/cat.png",
+                    "detail": "auto",
+                },
+            ],
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_chat_session_stream_preserves_multimodal_history() -> None:
+    provider = FakeStreamingProvider(
+        [
+            [
+                ProviderCompletedEvent(
+                    response=ProviderResponse(
+                        response_id="resp_1",
+                        output_text="Stored image.",
+                        output_items=[
+                            {
+                                "type": "message",
+                                "role": "assistant",
+                                "content": [{"type": "output_text", "text": "Stored image."}],
+                            }
+                        ],
+                        raw_response={"id": "resp_1"},
+                    )
+                )
+            ],
+            [
+                ProviderCompletedEvent(
+                    response=ProviderResponse(
+                        response_id="resp_2",
+                        output_text="It was a cat.",
+                        output_items=[
+                            {
+                                "type": "message",
+                                "role": "assistant",
+                                "content": [{"type": "output_text", "text": "It was a cat."}],
+                            }
+                        ],
+                        raw_response={"id": "resp_2"},
+                    )
+                )
+            ],
+        ]
+    )
+    agent = Agent(config=AgentConfig(model="gpt-5"), provider=provider)
+    chat = agent.chat()
+
+    _ = [
+        event
+        async for event in chat.stream(
+            [
+                ChatMessage(
+                    role="user",
+                    content=[
+                        TextPart("Remember this image."),
+                        ImagePart.from_url("https://example.com/cat.png"),
+                    ],
+                )
+            ]
+        )
+    ]
+    events = [event async for event in chat.stream("What was in the image?")]
+
+    assert events[-1].type == "completed"
+    assert provider.calls[1]["input_items"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Remember this image."},
+                {
+                    "type": "input_image",
+                    "image_url": "https://example.com/cat.png",
+                    "detail": "auto",
+                },
+            ],
+        },
+        {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Stored image."}],
+        },
+        {
+            "type": "message",
+            "role": "user",
+            "content": "What was in the image?",
         },
     ]

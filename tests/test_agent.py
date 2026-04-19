@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Sequence
+from pathlib import Path
 from typing import Any
 
 import pytest
 from pydantic import BaseModel
 
-from agent_harness import Agent, AgentConfig, ChatMessage, tool
+from agent_harness import Agent, AgentConfig, ChatMessage, ImagePart, TextPart, tool
 from agent_harness.errors import MaxTurnsExceededError, ProviderError, ToolExecutionError
 from agent_harness.providers.base import ConversationItem, ProviderCompletedEvent, ProviderResponse, ProviderTextDeltaEvent
 
@@ -101,6 +102,49 @@ async def test_run_without_tools_returns_plain_text() -> None:
     assert result.output_text == "hello world"
     assert result.output_data is None
     assert result.tool_results == []
+
+
+@pytest.mark.asyncio
+async def test_run_accepts_multimodal_message() -> None:
+    provider = FakeProvider(
+        [
+            ProviderResponse(
+                response_id="resp_1",
+                output_text="That looks like a cat.",
+                output_items=[],
+                raw_response={"id": "resp_1"},
+            )
+        ]
+    )
+    agent = Agent(config=AgentConfig(model="gpt-5"), provider=provider)
+
+    result = await agent.run(
+        [
+            ChatMessage(
+                role="user",
+                content=[
+                    TextPart("What is in this image?"),
+                    ImagePart.from_url("https://example.com/cat.png"),
+                ],
+            )
+        ]
+    )
+
+    assert result.output_text == "That looks like a cat."
+    assert provider.calls[0]["input_items"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "What is in this image?"},
+                {
+                    "type": "input_image",
+                    "image_url": "https://example.com/cat.png",
+                    "detail": "auto",
+                },
+            ],
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -341,6 +385,53 @@ async def test_run_returns_structured_output_without_tools() -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_supports_structured_output_with_image_input() -> None:
+    person = Person(name="Sarah", age=29)
+    provider = FakeProvider(
+        [
+            ProviderResponse(
+                response_id="resp_1",
+                output_text='{"name":"Sarah","age":29}',
+                output_data=person,
+                output_items=[],
+                raw_response={"id": "resp_1"},
+            )
+        ]
+    )
+    agent = Agent(config=AgentConfig(model="gpt-5"), provider=provider)
+
+    result = await agent.run(
+        [
+            ChatMessage(
+                role="user",
+                content=[
+                    TextPart("Extract the person in this image."),
+                    ImagePart.from_url("https://example.com/person.png"),
+                ],
+            )
+        ],
+        response_model=Person,
+    )
+
+    assert result.output_data == person
+    assert provider.calls[0]["response_model"] is Person
+    assert provider.calls[0]["input_items"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Extract the person in this image."},
+                {
+                    "type": "input_image",
+                    "image_url": "https://example.com/person.png",
+                    "detail": "auto",
+                },
+            ],
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_run_returns_structured_output_after_tool_call() -> None:
     weather = WeatherAnswer(city="San Francisco", temperature_f=65, summary="Foggy")
     provider = FakeProvider(
@@ -469,3 +560,111 @@ async def test_chat_session_preserves_conversation_history() -> None:
         ChatMessage(role="user", content="What name did I give you?"),
         ChatMessage(role="assistant", content="You told me your name is Anson."),
     ]
+
+
+@pytest.mark.asyncio
+async def test_chat_session_preserves_multimodal_history() -> None:
+    provider = FakeProvider(
+        [
+            ProviderResponse(
+                response_id="resp_1",
+                output_text="Stored the image.",
+                output_items=[
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "Stored the image."}],
+                    }
+                ],
+                raw_response={"id": "resp_1"},
+            ),
+            ProviderResponse(
+                response_id="resp_2",
+                output_text="The image showed a cat.",
+                output_items=[
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "The image showed a cat."}],
+                    }
+                ],
+                raw_response={"id": "resp_2"},
+            ),
+        ]
+    )
+    agent = Agent(config=AgentConfig(model="gpt-5"), provider=provider)
+    chat = agent.chat()
+
+    await chat.run(
+        [
+            ChatMessage(
+                role="user",
+                content=[
+                    TextPart("Remember this image."),
+                    ImagePart.from_url("https://example.com/cat.png", detail="high"),
+                ],
+            )
+        ]
+    )
+    second = await chat.run("What was in the image?")
+
+    assert second.output_text == "The image showed a cat."
+    assert provider.calls[1]["input_items"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Remember this image."},
+                {
+                    "type": "input_image",
+                    "image_url": "https://example.com/cat.png",
+                    "detail": "high",
+                },
+            ],
+        },
+        {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Stored the image."}],
+        },
+        {
+            "type": "message",
+            "role": "user",
+            "content": "What was in the image?",
+        },
+    ]
+    assert chat.history == [
+        ChatMessage(
+            role="user",
+            content=[
+                TextPart("Remember this image."),
+                ImagePart.from_url("https://example.com/cat.png", detail="high"),
+            ],
+        ),
+        ChatMessage(role="assistant", content="Stored the image."),
+        ChatMessage(role="user", content="What was in the image?"),
+        ChatMessage(role="assistant", content="The image showed a cat."),
+    ]
+
+
+def test_image_part_from_file_creates_data_url(tmp_path: Path) -> None:
+    image_path = tmp_path / "sample.png"
+    image_path.write_bytes(b"\x89PNG\r\n\x1a\nfakepng")
+
+    part = ImagePart.from_file(str(image_path), detail="high")
+
+    assert part.detail == "high"
+    assert part.image_url.startswith("data:image/png;base64,")
+
+
+def test_image_part_from_file_rejects_missing_paths() -> None:
+    with pytest.raises(ValueError, match="does not exist"):
+        ImagePart.from_file("missing.png")
+
+
+def test_image_part_from_file_rejects_unsupported_types(tmp_path: Path) -> None:
+    file_path = tmp_path / "notes.txt"
+    file_path.write_text("not an image")
+
+    with pytest.raises(ValueError, match="Unsupported image file type"):
+        ImagePart.from_file(str(file_path))

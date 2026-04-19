@@ -18,6 +18,14 @@ uv run python examples/basic_agent.py
   - Shows how to keep follow-up message history automatically
   - Use this for chat apps and multi-turn conversations
 
+- `image_input.py`
+  - Shows the simplest multimodal prompt with text plus one image
+  - Use this when you want image understanding without a persistent chat session
+
+- `chat_with_images.py`
+  - Shows a chat session where the first turn includes an image and the second turn follows up on it
+  - Use this for multimodal chat apps
+
 - `structured_output.py`
   - Shows the simplest possible structured output flow
   - Use this when you want `result.output_data` from a Pydantic schema

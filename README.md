@@ -85,6 +85,75 @@ The result object includes:
 - `result.tool_results`: tool execution history
 - `result.raw_responses`: raw-ish provider payloads for debugging
 
+## Images
+
+The API is intentionally two-tier:
+
+- plain text stays trivial
+- images use a multimodal message shape only when you need them
+
+### Plain text
+
+```python
+result = await agent.run("Hello")
+```
+
+### Remote image URL
+
+```python
+from agent_harness import Agent, AgentConfig, ChatMessage, ImagePart, TextPart
+
+agent = Agent(config=AgentConfig(model="gpt-5"))
+
+result = await agent.run(
+    [
+        ChatMessage(
+            role="user",
+            content=[
+                TextPart("What is in this image?"),
+                ImagePart.from_url("https://example.com/cat.png"),
+            ],
+        )
+    ]
+)
+```
+
+### Local image file
+
+```python
+result = await agent.run(
+    [
+        ChatMessage(
+            role="user",
+            content=[
+                TextPart("Describe this image."),
+                ImagePart.from_file("cat.png"),
+            ],
+        )
+    ]
+)
+```
+
+### Chat with images
+
+```python
+chat = agent.chat()
+
+await chat.run(
+    [
+        ChatMessage(
+            role="user",
+            content=[
+                TextPart("Remember this photo."),
+                ImagePart.from_file("photo.jpg"),
+            ],
+        )
+    ]
+)
+
+result = await chat.run("What was in the photo?")
+```
+
 ## Conversation History
 
 There are now two trivial ways to work with more than one message.
@@ -130,6 +199,8 @@ Available examples:
 
 - [basic_agent.py](/C:/Users/Anson/Desktop/agent-harness-base/examples/basic_agent.py): smallest possible agent with one tool
 - [chat_session.py](/C:/Users/Anson/Desktop/agent-harness-base/examples/chat_session.py): persistent conversation history for follow-up chat apps
+- [image_input.py](/C:/Users/Anson/Desktop/agent-harness-base/examples/image_input.py): one-turn multimodal input with text plus an image
+- [chat_with_images.py](/C:/Users/Anson/Desktop/agent-harness-base/examples/chat_with_images.py): follow-up chat after sending an image
 - [structured_output.py](/C:/Users/Anson/Desktop/agent-harness-base/examples/structured_output.py): extract typed data with a Pydantic schema
 - [structured_with_tools.py](/C:/Users/Anson/Desktop/agent-harness-base/examples/structured_with_tools.py): combine tools and structured outputs
 - [streaming.py](/C:/Users/Anson/Desktop/agent-harness-base/examples/streaming.py): stream text deltas and read the final result
@@ -292,6 +363,8 @@ An `OPENAI_MODEL` value can also be used as a convenience when creating `AgentCo
 - `agent.chat(messages=None)`: create a persistent chat session with in-memory history
 - `AgentConfig(...)`: runtime configuration
 - `ChatMessage(role, content)`: simple message type for explicit conversation history
+- `TextPart(...)`: text content inside a multimodal message
+- `ImagePart.from_url(...)` / `ImagePart.from_file(...)`: image content inside a multimodal message
 - `@tool`: tool decorator
 - `ToolRegistry`: explicit tool registration if you need it
 
