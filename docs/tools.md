@@ -413,3 +413,74 @@ async def main() -> None:
 
 asyncio.run(main())
 ```
+
+## MCP Servers
+
+In addition to local Python tools, you can give the model access to remote MCP (Model Context Protocol) servers. These are *hosted* tools — OpenAI's Responses API talks to the MCP server on your behalf. No local code runs per call.
+
+```python
+from simple_agent_base import Agent, AgentConfig, MCPServer
+
+agent = Agent(
+    config=AgentConfig(model="gpt-5.4"),
+    mcp_servers=[
+        MCPServer(
+            server_label="deepwiki",
+            server_url="https://mcp.deepwiki.com/mcp",
+        )
+    ],
+)
+```
+
+`mcp_servers` is independent of `tools=` — you can mix local function tools and remote MCP servers on the same agent.
+
+### Configuration
+
+`MCPServer` exposes the full tool-param surface the Responses API accepts:
+
+| Field | Purpose |
+| --- | --- |
+| `server_label` | Required identifier the model uses to reference the server. |
+| `server_url` | HTTP(S) endpoint of the MCP server. Exactly one of `server_url` or `connector_id`. |
+| `connector_id` | OpenAI service connector id (e.g. `connector_gmail`, `connector_googledrive`). |
+| `authorization` | OAuth access token for the remote server. |
+| `headers` | Additional HTTP headers (auth, tracing, etc). |
+| `allowed_tools` | `list[str]` of tool names, or a filter object, to narrow what the model can call. |
+| `require_approval` | `"never"` (default), `"always"`, or a per-tool filter object. |
+| `server_description` | Free-text hint for the model. |
+
+### Approvals
+
+With `require_approval="never"` (the default) nothing else is needed. If you enable approvals, pass an `approval_handler` — the agent will pause the loop on each `mcp_approval_request`, call your handler, and send the `mcp_approval_response` back automatically:
+
+```python
+from simple_agent_base import MCPApprovalRequest
+
+def approve(request: MCPApprovalRequest) -> bool:
+    # sync or async; return True to allow, False to deny
+    return request.name in {"read_file", "list_files"}
+
+agent = Agent(
+    config=AgentConfig(model="gpt-5.4"),
+    mcp_servers=[
+        MCPServer(
+            server_label="gh",
+            server_url="https://gitmcp.io/owner/repo",
+            require_approval="always",
+        )
+    ],
+    approval_handler=approve,
+)
+```
+
+If approvals are requested and no handler is set, the run raises `MCPApprovalRequiredError`.
+
+### Inspecting MCP activity
+
+After a run, `AgentRunResult.mcp_calls` contains an `MCPCallRecord` per invocation with `server_label`, `name`, `arguments`, `output`, and `error`.
+
+When streaming, three additional event types are emitted:
+
+- `mcp_call_started`
+- `mcp_call_completed`
+- `mcp_approval_requested`

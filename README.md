@@ -134,6 +134,9 @@ Most projects only need these exports:
 - `ChatSnapshot`
 - `ToolRegistry`
 - `tool`
+- `MCPServer`
+- `MCPApprovalRequest`
+- `MCPCallRecord`
 
 ## How It Works
 
@@ -253,6 +256,70 @@ Bad fits:
 - create invoice, then email invoice
 - checkout, then send receipt
 - anything that depends on ordering or shared mutable state
+
+### MCP Servers
+
+Give the model access to a remote MCP server by passing `mcp_servers` to the agent:
+
+```python
+from simple_agent_base import Agent, AgentConfig, MCPServer
+
+agent = Agent(
+    config=AgentConfig(model="gpt-5.4"),
+    mcp_servers=[
+        MCPServer(
+            server_label="deepwiki",
+            server_url="https://mcp.deepwiki.com/mcp",
+        )
+    ],
+)
+
+result = await agent.run("Summarize the modelcontextprotocol/python-sdk README.")
+print(result.output_text)
+for call in result.mcp_calls:
+    print(call.server_label, call.name, call.arguments)
+```
+
+MCP servers are sent to the OpenAI Responses API as hosted tools — OpenAI handles tool discovery, invocation, and result streaming. Nothing runs locally.
+
+`MCPServer` fields:
+
+- `server_label`: required identifier
+- `server_url` or `connector_id`: exactly one is required (`connector_id` is for OpenAI service connectors such as `connector_gmail`)
+- `authorization`: OAuth access token
+- `headers`: additional HTTP headers for auth, tracing, etc.
+- `allowed_tools`: list of tool names to expose (or a filter object)
+- `require_approval`: `"never"` (default), `"always"`, or a filter object per tool
+- `server_description`: optional free-text hint for the model
+
+For gated tools, set `require_approval="always"` and pass an `approval_handler`:
+
+```python
+from simple_agent_base import MCPApprovalRequest
+
+def approve(request: MCPApprovalRequest) -> bool:
+    return input(f"Run {request.name}? [y/N] ").lower() == "y"
+
+agent = Agent(
+    config=AgentConfig(model="gpt-5.4"),
+    mcp_servers=[
+        MCPServer(
+            server_label="gh",
+            server_url="https://gitmcp.io/owner/repo",
+            require_approval="always",
+        )
+    ],
+    approval_handler=approve,
+)
+```
+
+The handler can be sync or async. If approvals are requested and no handler is set, the package raises `MCPApprovalRequiredError`.
+
+Streaming surfaces three new event types alongside the existing ones:
+
+- `mcp_call_started`
+- `mcp_call_completed`
+- `mcp_approval_requested`
 
 ### Structured Output
 

@@ -20,3 +20,7 @@ class MaxTurnsExceededError(AgentHarnessError):
 
 class ProviderError(AgentHarnessError):
     """Raised when the provider cannot complete a model request."""
+
+
+class MCPApprovalRequiredError(AgentHarnessError):
+    """Raised when an MCP tool requires approval but no approval_handler is set."""

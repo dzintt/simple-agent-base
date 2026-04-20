@@ -10,7 +10,17 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from simple_agent_base import Agent, AgentConfig, ChatMessage, FilePart, ImagePart, TextPart, tool
+from simple_agent_base import (
+    Agent,
+    AgentConfig,
+    ChatMessage,
+    FilePart,
+    ImagePart,
+    MCPApprovalRequest,
+    MCPServer,
+    TextPart,
+    tool,
+)
 
 class Person(BaseModel):
     name: str
@@ -228,6 +238,15 @@ def print_result_details(result: Any) -> None:
                 f"  - tool {tool_result.name}("
                 f"arguments={tool_result.arguments}) -> {tool_result.output}"
             )
+    mcp_calls = getattr(result, "mcp_calls", [])
+    print(f"- mcp_call_count: {len(mcp_calls)}")
+    for mcp_call in mcp_calls:
+        output_preview = (mcp_call.output or "")[:120]
+        print(
+            f"  - mcp {mcp_call.server_label}.{mcp_call.name}("
+            f"arguments={mcp_call.arguments}) -> {output_preview!r}"
+            + (f" error={mcp_call.error!r}" if mcp_call.error else "")
+        )
 
 
 def print_chat_history(chat_history: list[ChatMessage]) -> None:
@@ -624,6 +643,130 @@ async def run_chat_with_image_follow_up() -> None:
         image_path.unlink(missing_ok=True)
 
 
+async def run_mcp_server() -> None:
+    agent = Agent(
+        config=make_config(),
+        mcp_servers=[
+            MCPServer(
+                server_label="deepwiki",
+                server_url="https://mcp.deepwiki.com/mcp",
+            )
+        ],
+    )
+    prompt = (
+        "Use the deepwiki MCP server to look up the repository "
+        "'modelcontextprotocol/python-sdk' and reply with a one-sentence summary."
+    )
+    try:
+        print("MCP servers:")
+        print("- deepwiki -> https://mcp.deepwiki.com/mcp (require_approval=never)")
+        print_input("Sending prompt:", prompt)
+        result = await agent.run(prompt)
+        print_result_details(result)
+        ensure(result.output_text.strip(), "MCP run returned empty output_text.")
+        ensure(len(result.mcp_calls) >= 1, "Expected at least one mcp_call in result.mcp_calls.")
+        ensure(
+            all(call.server_label == "deepwiki" for call in result.mcp_calls if call.server_label),
+            "Unexpected mcp_call server_label.",
+        )
+    finally:
+        await agent.aclose()
+
+
+async def run_mcp_server_with_approval() -> None:
+    approvals_seen: list[MCPApprovalRequest] = []
+
+    def approve(request: MCPApprovalRequest) -> bool:
+        approvals_seen.append(request)
+        print(
+            f"- approval requested: {request.server_label}.{request.name}("
+            f"arguments={request.arguments})"
+        )
+        return True
+
+    agent = Agent(
+        config=make_config(),
+        mcp_servers=[
+            MCPServer(
+                server_label="deepwiki",
+                server_url="https://mcp.deepwiki.com/mcp",
+                require_approval="always",
+            )
+        ],
+        approval_handler=approve,
+    )
+    prompt = (
+        "Use the deepwiki MCP server to find any one fact about "
+        "'modelcontextprotocol/python-sdk' and reply in one short sentence."
+    )
+    try:
+        print("MCP servers:")
+        print("- deepwiki -> https://mcp.deepwiki.com/mcp (require_approval=always)")
+        print_input("Sending prompt:", prompt)
+        result = await agent.run(prompt)
+        print_result_details(result)
+        print(f"- approval_handler_invocations: {len(approvals_seen)}")
+        ensure(result.output_text.strip(), "MCP approval run returned empty output_text.")
+        ensure(len(approvals_seen) >= 1, "Expected the approval handler to be invoked at least once.")
+        ensure(len(result.mcp_calls) >= 1, "Expected at least one mcp_call after approval.")
+    finally:
+        await agent.aclose()
+
+
+async def run_mcp_streaming() -> None:
+    agent = Agent(
+        config=make_config(),
+        mcp_servers=[
+            MCPServer(
+                server_label="deepwiki",
+                server_url="https://mcp.deepwiki.com/mcp",
+            )
+        ],
+    )
+    prompt = (
+        "Use the deepwiki MCP server to look up 'modelcontextprotocol/python-sdk' "
+        "and reply with one short sentence."
+    )
+    saw_mcp_started = False
+    saw_mcp_completed = False
+    final_result = None
+    try:
+        print("MCP servers:")
+        print("- deepwiki -> https://mcp.deepwiki.com/mcp (require_approval=never)")
+        print_input("Sending prompt:", prompt)
+        print("Streaming events:")
+        async for event in agent.stream(prompt):
+            if event.type == "text_delta" and event.delta:
+                print(f"- delta: {event.delta}")
+            elif event.type == "mcp_call_started":
+                saw_mcp_started = True
+                mcp_call = event.mcp_call
+                label = mcp_call.server_label if mcp_call else None
+                name = mcp_call.name if mcp_call else None
+                print(f"- mcp_call_started: {label}.{name}")
+            elif event.type == "mcp_call_completed":
+                saw_mcp_completed = True
+                mcp_call = event.mcp_call
+                label = mcp_call.server_label if mcp_call else None
+                name = mcp_call.name if mcp_call else None
+                print(f"- mcp_call_completed: {label}.{name}")
+            elif event.type == "completed" and event.result is not None:
+                final_result = event.result
+                print("Completed event received.")
+                print_result_details(event.result)
+            elif event.type == "error" and event.error:
+                print(f"- error: {event.error}")
+        ensure(saw_mcp_started, "Streaming did not emit mcp_call_started.")
+        ensure(saw_mcp_completed, "Streaming did not emit mcp_call_completed.")
+        ensure(final_result is not None, "Streaming did not emit a completed event.")
+        ensure(
+            final_result is not None and len(final_result.mcp_calls) >= 1,
+            "Streaming final result did not include any mcp_calls.",
+        )
+    finally:
+        await agent.aclose()
+
+
 async def main() -> None:
     print_config_summary()
 
@@ -640,6 +783,9 @@ async def main() -> None:
         await run_check("Streaming", run_streaming),
         await run_check("Image Structured Output", run_image_structured_output),
         await run_check("Chat With Image Follow-Up", run_chat_with_image_follow_up),
+        await run_check("MCP Server", run_mcp_server),
+        await run_check("MCP Server With Approval", run_mcp_server_with_approval),
+        await run_check("MCP Streaming", run_mcp_streaming),
     ]
 
     section("Summary")

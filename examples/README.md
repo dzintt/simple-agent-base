@@ -142,6 +142,17 @@ Shows:
 
 - tools plus structured output in one run
 
+### `mcp_server.py`
+
+Use this when you want to give the model access to a remote MCP server.
+
+Shows:
+
+- `MCPServer(server_label=..., server_url=...)`
+- `Agent(mcp_servers=[...])`
+- reading `result.mcp_calls`
+- an `approval_handler` with `require_approval="always"`
+
 ### `streaming.py`
 
 Use this when you want progressive output or tool lifecycle events.

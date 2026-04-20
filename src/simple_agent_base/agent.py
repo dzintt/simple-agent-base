@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import AsyncIterator, Callable, Sequence
 from typing import Any
 
@@ -8,7 +9,13 @@ from pydantic import BaseModel
 
 from simple_agent_base.chat import ChatSession
 from simple_agent_base.config import AgentConfig
-from simple_agent_base.errors import MaxTurnsExceededError
+from simple_agent_base.errors import MaxTurnsExceededError, MCPApprovalRequiredError
+from simple_agent_base.mcp import (
+    ApprovalHandler,
+    MCPApprovalRequest,
+    MCPCallRecord,
+    MCPServer,
+)
 from simple_agent_base.providers.base import ConversationItem, Provider
 from simple_agent_base.providers.openai import OpenAIResponsesProvider
 from simple_agent_base.sync_utils import SyncRuntime, ensure_sync_allowed, run_sync_awaitable
@@ -34,11 +41,15 @@ class Agent:
         tools: list[Callable[..., Any]] | ToolRegistry | None = None,
         provider: Provider | None = None,
         system_prompt: str | None = None,
+        mcp_servers: Sequence[MCPServer] | None = None,
+        approval_handler: ApprovalHandler | None = None,
     ) -> None:
         self.config = config
         self.registry = tools if isinstance(tools, ToolRegistry) else ToolRegistry(tools)
         self.provider = provider or OpenAIResponsesProvider(config)
         self.system_prompt = self._clean_system_prompt(system_prompt)
+        self.mcp_servers: list[MCPServer] = list(mcp_servers or [])
+        self.approval_handler = approval_handler
         self._sync_runtime: SyncRuntime | None = None
 
     async def run(
@@ -152,29 +163,37 @@ class Agent:
         response_model: type[BaseModel] | None = None,
     ) -> AgentRunResult:
         tool_results: list[ToolExecutionResult] = []
+        mcp_calls: list[MCPCallRecord] = []
         raw_responses: list[dict[str, Any]] = []
 
         for _ in range(self.config.max_turns):
             response = await self.provider.create_response(
                 input_items=transcript,
-                tools=self.registry.to_openai_tools(),
+                tools=self._build_tool_params(),
                 response_model=response_model,
             )
             raw_responses.append(response.raw_response or {})
             transcript.extend(response.output_items)
 
-            if not response.tool_calls:
+            mcp_calls.extend(self._collect_mcp_calls(response.output_items))
+            approval_requests = self._collect_mcp_approval_requests(response.output_items)
+
+            if not response.tool_calls and not approval_requests:
                 return AgentRunResult(
                     output_text=response.output_text,
                     output_data=response.output_data,
                     response_id=response.response_id,
                     tool_results=tool_results,
+                    mcp_calls=mcp_calls,
                     raw_responses=raw_responses,
                 )
 
             for result in await self._execute_tool_batch(response.tool_calls):
                 tool_results.append(result)
                 transcript.append(self._tool_output_item(result))
+
+            for approval_item in await self._resolve_approvals(approval_requests):
+                transcript.append(approval_item)
 
         raise MaxTurnsExceededError(
             f"Agent exceeded max_turns={self.config.max_turns} before reaching a final response."
@@ -187,6 +206,7 @@ class Agent:
         response_model: type[BaseModel] | None = None,
     ) -> AsyncIterator[AgentEvent]:
         tool_results: list[ToolExecutionResult] = []
+        mcp_calls: list[MCPCallRecord] = []
         raw_responses: list[dict[str, Any]] = []
 
         try:
@@ -195,7 +215,7 @@ class Agent:
 
                 async for event in self.provider.stream_response(
                     input_items=transcript,
-                    tools=self.registry.to_openai_tools(),
+                    tools=self._build_tool_params(),
                     response_model=response_model,
                 ):
                     if event.type == "text_delta":
@@ -209,12 +229,21 @@ class Agent:
                 raw_responses.append(final_response.raw_response or {})
                 transcript.extend(final_response.output_items)
 
-                if not final_response.tool_calls:
+                turn_mcp_calls = self._collect_mcp_calls(final_response.output_items)
+                mcp_calls.extend(turn_mcp_calls)
+                for mcp_record in turn_mcp_calls:
+                    yield AgentEvent(type="mcp_call_started", mcp_call=mcp_record)
+                    yield AgentEvent(type="mcp_call_completed", mcp_call=mcp_record)
+
+                approval_requests = self._collect_mcp_approval_requests(final_response.output_items)
+
+                if not final_response.tool_calls and not approval_requests:
                     result = AgentRunResult(
                         output_text=final_response.output_text,
                         output_data=final_response.output_data,
                         response_id=final_response.response_id,
                         tool_results=tool_results,
+                        mcp_calls=mcp_calls,
                         raw_responses=raw_responses,
                     )
                     yield AgentEvent(type="completed", result=result)
@@ -227,6 +256,12 @@ class Agent:
                     tool_results.append(tool_result)
                     transcript.append(self._tool_output_item(tool_result))
                     yield AgentEvent(type="tool_call_completed", tool_result=tool_result)
+
+                for approval in approval_requests:
+                    yield AgentEvent(type="mcp_approval_requested", mcp_approval=approval)
+
+                for approval_item in await self._resolve_approvals(approval_requests):
+                    transcript.append(approval_item)
 
             raise MaxTurnsExceededError(
                 f"Agent exceeded max_turns={self.config.max_turns} before reaching a final response."
@@ -248,6 +283,108 @@ class Agent:
             return results
 
         return list(await asyncio.gather(*(self._execute_tool(call) for call in calls)))
+
+    def _build_tool_params(self) -> list[dict[str, Any]]:
+        tools = list(self.registry.to_openai_tools())
+        tools.extend(server.to_tool_param() for server in self.mcp_servers)
+        return tools
+
+    @staticmethod
+    def _collect_mcp_calls(
+        output_items: Sequence[ConversationItem],
+    ) -> list[MCPCallRecord]:
+        records: list[MCPCallRecord] = []
+        for item in output_items:
+            if not isinstance(item, dict) or item.get("type") != "mcp_call":
+                continue
+
+            raw_arguments = item.get("arguments")
+            arguments: dict[str, Any] = {}
+            if isinstance(raw_arguments, str) and raw_arguments:
+                try:
+                    import json
+
+                    parsed = json.loads(raw_arguments)
+                    if isinstance(parsed, dict):
+                        arguments = parsed
+                except json.JSONDecodeError:
+                    arguments = {}
+            elif isinstance(raw_arguments, dict):
+                arguments = raw_arguments
+
+            records.append(
+                MCPCallRecord(
+                    id=item.get("id"),
+                    server_label=item.get("server_label"),
+                    name=item.get("name", ""),
+                    arguments=arguments,
+                    output=item.get("output"),
+                    error=item.get("error"),
+                )
+            )
+        return records
+
+    @staticmethod
+    def _collect_mcp_approval_requests(
+        output_items: Sequence[ConversationItem],
+    ) -> list[MCPApprovalRequest]:
+        approvals: list[MCPApprovalRequest] = []
+        for item in output_items:
+            if not isinstance(item, dict) or item.get("type") != "mcp_approval_request":
+                continue
+
+            raw_arguments = item.get("arguments")
+            arguments: dict[str, Any] = {}
+            if isinstance(raw_arguments, str) and raw_arguments:
+                try:
+                    import json
+
+                    parsed = json.loads(raw_arguments)
+                    if isinstance(parsed, dict):
+                        arguments = parsed
+                except json.JSONDecodeError:
+                    arguments = {}
+            elif isinstance(raw_arguments, dict):
+                arguments = raw_arguments
+
+            approvals.append(
+                MCPApprovalRequest(
+                    id=item.get("id", ""),
+                    server_label=item.get("server_label", ""),
+                    name=item.get("name", ""),
+                    arguments=arguments,
+                )
+            )
+        return approvals
+
+    async def _resolve_approvals(
+        self,
+        approvals: Sequence[MCPApprovalRequest],
+    ) -> list[dict[str, Any]]:
+        if not approvals:
+            return []
+
+        if self.approval_handler is None:
+            raise MCPApprovalRequiredError(
+                "An MCP server requested approval but no approval_handler was provided. "
+                'Set require_approval="never" on the MCPServer or pass approval_handler=... to Agent(...).'
+            )
+
+        items: list[dict[str, Any]] = []
+        for approval in approvals:
+            result = self.approval_handler(approval)
+            if inspect.isawaitable(result):
+                approved = bool(await result)
+            else:
+                approved = bool(result)
+            items.append(
+                {
+                    "type": "mcp_approval_response",
+                    "approval_request_id": approval.id,
+                    "approve": approved,
+                }
+            )
+        return items
 
     def _run_sync_call(
         self,

@@ -9,6 +9,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from simple_agent_base.mcp import MCPApprovalRequest, MCPCallRecord
+
 
 @dataclass(slots=True)
 class ToolDefinition:
@@ -237,6 +239,7 @@ class AgentRunResult(BaseModel):
     output_data: BaseModel | None = None
     response_id: str | None = None
     tool_results: list[ToolExecutionResult] = Field(default_factory=list)
+    mcp_calls: list[MCPCallRecord] = Field(default_factory=list)
     raw_responses: list[dict[str, Any]] = Field(default_factory=list)
 
 
@@ -247,11 +250,16 @@ class AgentEvent(BaseModel):
         "text_delta",
         "tool_call_started",
         "tool_call_completed",
+        "mcp_call_started",
+        "mcp_call_completed",
+        "mcp_approval_requested",
         "completed",
         "error",
     ]
     delta: str | None = None
     tool_call: ToolCallRequest | None = None
     tool_result: ToolExecutionResult | None = None
+    mcp_call: MCPCallRecord | None = None
+    mcp_approval: MCPApprovalRequest | None = None
     result: AgentRunResult | None = None
     error: str | None = None
