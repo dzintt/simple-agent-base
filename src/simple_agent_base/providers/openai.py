@@ -9,9 +9,19 @@ from openai import AsyncOpenAI, DefaultAioHttpClient
 
 from simple_agent_base.config import AgentConfig
 from simple_agent_base.errors import ProviderError
+from simple_agent_base.mcp import mcp_approval_request_from_item, mcp_call_record_from_item
 from simple_agent_base.types import ToolCallRequest
 
-from .base import ConversationItem, ProviderCompletedEvent, ProviderResponse, ProviderTextDeltaEvent
+from .base import (
+    ConversationItem,
+    ProviderCompletedEvent,
+    ProviderEvent,
+    ProviderMCPApprovalRequestedEvent,
+    ProviderMCPCallCompletedEvent,
+    ProviderMCPCallStartedEvent,
+    ProviderResponse,
+    ProviderTextDeltaEvent,
+)
 
 
 class OpenAIResponsesProvider:
@@ -49,7 +59,7 @@ class OpenAIResponsesProvider:
         input_items: Sequence[ConversationItem],
         tools: Sequence[dict[str, Any]],
         response_model: type[BaseModel] | None = None,
-    ) -> AsyncIterator[ProviderTextDeltaEvent | ProviderCompletedEvent]:
+    ) -> AsyncIterator[ProviderEvent]:
         try:
             async with self._client.responses.stream(
                 **self._request_kwargs(input_items, tools, response_model=response_model)
@@ -57,6 +67,22 @@ class OpenAIResponsesProvider:
                 async for event in stream:
                     if event.type == "response.output_text.delta":
                         yield ProviderTextDeltaEvent(delta=event.delta)
+                    elif event.type == "response.output_item.added":
+                        item = event.item
+                        if getattr(item, "type", None) == "mcp_call":
+                            yield ProviderMCPCallStartedEvent(
+                                mcp_call=mcp_call_record_from_item(item)
+                            )
+                        elif getattr(item, "type", None) == "mcp_approval_request":
+                            yield ProviderMCPApprovalRequestedEvent(
+                                mcp_approval=mcp_approval_request_from_item(item)
+                            )
+                    elif event.type == "response.output_item.done":
+                        item = event.item
+                        if getattr(item, "type", None) == "mcp_call":
+                            yield ProviderMCPCallCompletedEvent(
+                                mcp_call=mcp_call_record_from_item(item)
+                            )
 
                 final_response = await stream.get_final_response()
         except Exception as exc:

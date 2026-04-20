@@ -16,6 +16,10 @@ from simple_agent_base import (
 from simple_agent_base.providers.base import (
     ConversationItem,
     ProviderCompletedEvent,
+    ProviderEvent,
+    ProviderMCPApprovalRequestedEvent,
+    ProviderMCPCallCompletedEvent,
+    ProviderMCPCallStartedEvent,
     ProviderResponse,
     ProviderTextDeltaEvent,
 )
@@ -25,7 +29,7 @@ class FakeProvider:
     def __init__(
         self,
         responses: list[ProviderResponse] | None = None,
-        stream_sequences: list[list[ProviderTextDeltaEvent | ProviderCompletedEvent]] | None = None,
+        stream_sequences: list[list[ProviderEvent]] | None = None,
     ) -> None:
         self.responses = list(responses or [])
         self.stream_sequences = list(stream_sequences or [])
@@ -54,7 +58,7 @@ class FakeProvider:
         input_items: Sequence[ConversationItem],
         tools: Sequence[dict[str, Any]],
         response_model: type[BaseModel] | None = None,
-    ) -> AsyncIterator[ProviderTextDeltaEvent | ProviderCompletedEvent]:
+    ) -> AsyncIterator[ProviderEvent]:
         self.stream_calls.append(
             {
                 "input_items": list(input_items),
@@ -81,7 +85,6 @@ def test_mcp_server_to_tool_param_minimal() -> None:
         "type": "mcp",
         "server_label": "deepwiki",
         "server_url": "https://mcp.deepwiki.com/mcp",
-        "require_approval": "never",
     }
 
 
@@ -359,6 +362,23 @@ async def test_stream_emits_mcp_call_events() -> None:
     provider = FakeProvider(
         stream_sequences=[
             [
+                ProviderMCPCallStartedEvent(
+                    mcp_call={
+                        "id": "mcp_1",
+                        "server_label": "deepwiki",
+                        "name": "ask_question",
+                        "arguments": {},
+                    }
+                ),
+                ProviderMCPCallCompletedEvent(
+                    mcp_call={
+                        "id": "mcp_1",
+                        "server_label": "deepwiki",
+                        "name": "ask_question",
+                        "arguments": {},
+                        "output": "answer",
+                    }
+                ),
                 ProviderCompletedEvent(
                     response=ProviderResponse(
                         response_id="resp_1",
@@ -412,6 +432,14 @@ async def test_stream_emits_mcp_approval_requested_event() -> None:
     provider = FakeProvider(
         stream_sequences=[
             [
+                ProviderMCPApprovalRequestedEvent(
+                    mcp_approval={
+                        "id": "appr_1",
+                        "server_label": "deepwiki",
+                        "name": "ask_question",
+                        "arguments": {},
+                    }
+                ),
                 ProviderCompletedEvent(
                     response=ProviderResponse(
                         response_id="resp_1",

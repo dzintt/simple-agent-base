@@ -15,6 +15,8 @@ from simple_agent_base.mcp import (
     MCPApprovalRequest,
     MCPCallRecord,
     MCPServer,
+    mcp_approval_request_from_item,
+    mcp_call_record_from_item,
 )
 from simple_agent_base.providers.base import ConversationItem, Provider
 from simple_agent_base.providers.openai import OpenAIResponsesProvider
@@ -212,6 +214,7 @@ class Agent:
         try:
             for _ in range(self.config.max_turns):
                 final_response = None
+                streamed_approval_requests: list[MCPApprovalRequest] = []
 
                 async for event in self.provider.stream_response(
                     input_items=transcript,
@@ -220,6 +223,13 @@ class Agent:
                 ):
                     if event.type == "text_delta":
                         yield AgentEvent(type="text_delta", delta=event.delta)
+                    elif event.type == "mcp_call_started":
+                        yield AgentEvent(type="mcp_call_started", mcp_call=event.mcp_call)
+                    elif event.type == "mcp_call_completed":
+                        yield AgentEvent(type="mcp_call_completed", mcp_call=event.mcp_call)
+                    elif event.type == "mcp_approval_requested":
+                        streamed_approval_requests.append(event.mcp_approval)
+                        yield AgentEvent(type="mcp_approval_requested", mcp_approval=event.mcp_approval)
                     elif event.type == "completed":
                         final_response = event.response
 
@@ -229,13 +239,12 @@ class Agent:
                 raw_responses.append(final_response.raw_response or {})
                 transcript.extend(final_response.output_items)
 
-                turn_mcp_calls = self._collect_mcp_calls(final_response.output_items)
-                mcp_calls.extend(turn_mcp_calls)
-                for mcp_record in turn_mcp_calls:
-                    yield AgentEvent(type="mcp_call_started", mcp_call=mcp_record)
-                    yield AgentEvent(type="mcp_call_completed", mcp_call=mcp_record)
-
-                approval_requests = self._collect_mcp_approval_requests(final_response.output_items)
+                mcp_calls.extend(self._collect_mcp_calls(final_response.output_items))
+                approval_requests = (
+                    streamed_approval_requests
+                    if streamed_approval_requests
+                    else self._collect_mcp_approval_requests(final_response.output_items)
+                )
 
                 if not final_response.tool_calls and not approval_requests:
                     result = AgentRunResult(
@@ -256,9 +265,6 @@ class Agent:
                     tool_results.append(tool_result)
                     transcript.append(self._tool_output_item(tool_result))
                     yield AgentEvent(type="tool_call_completed", tool_result=tool_result)
-
-                for approval in approval_requests:
-                    yield AgentEvent(type="mcp_approval_requested", mcp_approval=approval)
 
                 for approval_item in await self._resolve_approvals(approval_requests):
                     transcript.append(approval_item)
@@ -297,31 +303,7 @@ class Agent:
         for item in output_items:
             if not isinstance(item, dict) or item.get("type") != "mcp_call":
                 continue
-
-            raw_arguments = item.get("arguments")
-            arguments: dict[str, Any] = {}
-            if isinstance(raw_arguments, str) and raw_arguments:
-                try:
-                    import json
-
-                    parsed = json.loads(raw_arguments)
-                    if isinstance(parsed, dict):
-                        arguments = parsed
-                except json.JSONDecodeError:
-                    arguments = {}
-            elif isinstance(raw_arguments, dict):
-                arguments = raw_arguments
-
-            records.append(
-                MCPCallRecord(
-                    id=item.get("id"),
-                    server_label=item.get("server_label"),
-                    name=item.get("name", ""),
-                    arguments=arguments,
-                    output=item.get("output"),
-                    error=item.get("error"),
-                )
-            )
+            records.append(mcp_call_record_from_item(item))
         return records
 
     @staticmethod
@@ -332,29 +314,7 @@ class Agent:
         for item in output_items:
             if not isinstance(item, dict) or item.get("type") != "mcp_approval_request":
                 continue
-
-            raw_arguments = item.get("arguments")
-            arguments: dict[str, Any] = {}
-            if isinstance(raw_arguments, str) and raw_arguments:
-                try:
-                    import json
-
-                    parsed = json.loads(raw_arguments)
-                    if isinstance(parsed, dict):
-                        arguments = parsed
-                except json.JSONDecodeError:
-                    arguments = {}
-            elif isinstance(raw_arguments, dict):
-                arguments = raw_arguments
-
-            approvals.append(
-                MCPApprovalRequest(
-                    id=item.get("id", ""),
-                    server_label=item.get("server_label", ""),
-                    name=item.get("name", ""),
-                    arguments=arguments,
-                )
-            )
+            approvals.append(mcp_approval_request_from_item(item))
         return approvals
 
     async def _resolve_approvals(

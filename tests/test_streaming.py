@@ -8,11 +8,17 @@ import pytest
 from pydantic import BaseModel
 
 from simple_agent_base import Agent, AgentConfig, ChatMessage, ChatSnapshot, FilePart, ImagePart, TextPart, tool
-from simple_agent_base.providers.base import ConversationItem, ProviderCompletedEvent, ProviderResponse, ProviderTextDeltaEvent
+from simple_agent_base.providers.base import (
+    ConversationItem,
+    ProviderCompletedEvent,
+    ProviderEvent,
+    ProviderResponse,
+    ProviderTextDeltaEvent,
+)
 
 
 class FakeStreamingProvider:
-    def __init__(self, event_sequences: list[list[ProviderTextDeltaEvent | ProviderCompletedEvent]]) -> None:
+    def __init__(self, event_sequences: list[list[ProviderEvent]]) -> None:
         self.event_sequences = list(event_sequences)
         self.calls: list[dict[str, Any]] = []
 
@@ -31,7 +37,7 @@ class FakeStreamingProvider:
         input_items: Sequence[ConversationItem],
         tools: Sequence[dict[str, Any]],
         response_model: type[BaseModel] | None = None,
-    ) -> AsyncIterator[ProviderTextDeltaEvent | ProviderCompletedEvent]:
+    ) -> AsyncIterator[ProviderEvent]:
         self.calls.append(
             {
                 "input_items": list(input_items),
@@ -53,7 +59,7 @@ class ExplodingStreamingProvider(FakeStreamingProvider):
         input_items: Sequence[ConversationItem],
         tools: Sequence[dict[str, Any]],
         response_model: type[BaseModel] | None = None,
-    ) -> AsyncIterator[ProviderTextDeltaEvent | ProviderCompletedEvent]:
+    ) -> AsyncIterator[ProviderEvent]:
         raise RuntimeError("stream failed")
         yield
 
@@ -296,7 +302,7 @@ def test_stream_sync_after_run_sync_reuses_the_same_agent_cleanly() -> None:
 
         async def stream_response(
             self, **kwargs: Any
-        ) -> AsyncIterator[ProviderTextDeltaEvent | ProviderCompletedEvent]:
+        ) -> AsyncIterator[ProviderEvent]:
             self.stream_calls.append(kwargs)
             yield ProviderTextDeltaEvent(delta="Hel")
             yield ProviderTextDeltaEvent(delta="lo")

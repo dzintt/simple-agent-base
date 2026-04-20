@@ -427,6 +427,7 @@ agent = Agent(
         MCPServer(
             server_label="deepwiki",
             server_url="https://mcp.deepwiki.com/mcp",
+            require_approval="never",
         )
     ],
 )
@@ -446,12 +447,27 @@ agent = Agent(
 | `authorization` | OAuth access token for the remote server. |
 | `headers` | Additional HTTP headers (auth, tracing, etc). |
 | `allowed_tools` | `list[str]` of tool names, or a filter object, to narrow what the model can call. |
-| `require_approval` | `"never"` (default), `"always"`, or a per-tool filter object. |
+| `require_approval` | Optional override of the platform default approval policy. Use `"never"` for trusted read-only servers, `"always"` to force approval, or a per-tool filter object. |
 | `server_description` | Free-text hint for the model. |
 
 ### Approvals
 
-With `require_approval="never"` (the default) nothing else is needed. If you enable approvals, pass an `approval_handler` — the agent will pause the loop on each `mcp_approval_request`, call your handler, and send the `mcp_approval_response` back automatically:
+For trusted public or read-only servers, set `require_approval="never"` and nothing else is needed:
+
+```python
+agent = Agent(
+    config=AgentConfig(model="gpt-5.4"),
+    mcp_servers=[
+        MCPServer(
+            server_label="deepwiki",
+            server_url="https://mcp.deepwiki.com/mcp",
+            require_approval="never",
+        )
+    ],
+)
+```
+
+If you want human approval, pass an `approval_handler` — the agent will pause the loop on each `mcp_approval_request`, call your handler, and send the `mcp_approval_response` back automatically:
 
 ```python
 from simple_agent_base import MCPApprovalRequest

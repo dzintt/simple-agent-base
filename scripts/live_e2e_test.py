@@ -650,6 +650,7 @@ async def run_mcp_server() -> None:
             MCPServer(
                 server_label="deepwiki",
                 server_url="https://mcp.deepwiki.com/mcp",
+                require_approval="never",
             )
         ],
     )
@@ -720,6 +721,7 @@ async def run_mcp_streaming() -> None:
             MCPServer(
                 server_label="deepwiki",
                 server_url="https://mcp.deepwiki.com/mcp",
+                require_approval="never",
             )
         ],
     )

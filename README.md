@@ -270,6 +270,7 @@ agent = Agent(
         MCPServer(
             server_label="deepwiki",
             server_url="https://mcp.deepwiki.com/mcp",
+            require_approval="never",
         )
     ],
 )
@@ -289,10 +290,25 @@ MCP servers are sent to the OpenAI Responses API as hosted tools — OpenAI hand
 - `authorization`: OAuth access token
 - `headers`: additional HTTP headers for auth, tracing, etc.
 - `allowed_tools`: list of tool names to expose (or a filter object)
-- `require_approval`: `"never"` (default), `"always"`, or a filter object per tool
+- `require_approval`: optional override of the platform default approval policy; set `"never"` for trusted read-only servers, `"always"` to force approval, or pass a filter object per tool
 - `server_description`: optional free-text hint for the model
 
-For gated tools, set `require_approval="always"` and pass an `approval_handler`:
+For trusted public or read-only servers, set `require_approval="never"` to skip approval plumbing:
+
+```python
+agent = Agent(
+    config=AgentConfig(model="gpt-5.4"),
+    mcp_servers=[
+        MCPServer(
+            server_label="deepwiki",
+            server_url="https://mcp.deepwiki.com/mcp",
+            require_approval="never",
+        )
+    ],
+)
+```
+
+To gate tools, set `require_approval="always"` and pass an `approval_handler`:
 
 ```python
 from simple_agent_base import MCPApprovalRequest

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
@@ -21,7 +22,7 @@ class MCPServer(BaseModel):
     authorization: str | None = None
     headers: dict[str, str] | None = None
     allowed_tools: list[str] | dict[str, Any] | None = None
-    require_approval: Literal["always", "never"] | dict[str, Any] | None = "never"
+    require_approval: Literal["always", "never"] | dict[str, Any] | None = None
     server_description: str | None = None
 
     @model_validator(mode="after")
@@ -84,6 +85,53 @@ class MCPCallRecord(BaseModel):
     arguments: dict[str, Any] = Field(default_factory=dict)
     output: str | None = None
     error: str | None = None
+
+
+def parse_mcp_arguments(raw_arguments: Any) -> dict[str, Any]:
+    """Convert MCP string arguments into a dict when possible."""
+    if isinstance(raw_arguments, str) and raw_arguments:
+        try:
+            parsed = json.loads(raw_arguments)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
+    if isinstance(raw_arguments, dict):
+        return raw_arguments
+
+    return {}
+
+
+def mcp_call_record_from_item(item: Any) -> MCPCallRecord:
+    """Build an MCPCallRecord from an SDK response item or plain dict."""
+    if isinstance(item, dict):
+        getter = item.get
+    else:
+        getter = lambda key, default=None: getattr(item, key, default)
+
+    return MCPCallRecord(
+        id=getter("id"),
+        server_label=getter("server_label"),
+        name=getter("name", ""),
+        arguments=parse_mcp_arguments(getter("arguments")),
+        output=getter("output"),
+        error=getter("error"),
+    )
+
+
+def mcp_approval_request_from_item(item: Any) -> MCPApprovalRequest:
+    """Build an MCPApprovalRequest from an SDK response item or plain dict."""
+    if isinstance(item, dict):
+        getter = item.get
+    else:
+        getter = lambda key, default=None: getattr(item, key, default)
+
+    return MCPApprovalRequest(
+        id=getter("id", ""),
+        server_label=getter("server_label", ""),
+        name=getter("name", ""),
+        arguments=parse_mcp_arguments(getter("arguments")),
+    )
 
 
 ApprovalHandler = Callable[[MCPApprovalRequest], "bool | Awaitable[bool]"]
