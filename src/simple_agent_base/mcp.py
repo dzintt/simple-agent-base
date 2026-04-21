@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 import httpx
 from mcp import ClientSession, StdioServerParameters, types as mcp_types
@@ -15,6 +15,7 @@ from mcp.client.streamable_http import streamable_http_client
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from simple_agent_base.errors import ToolRegistrationError
+from simple_agent_base.json_types import JSONObject
 
 
 class MCPServer(BaseModel):
@@ -100,7 +101,7 @@ class MCPApprovalRequest(BaseModel):
     id: str
     server_name: str
     name: str
-    arguments: dict[str, Any] = Field(default_factory=dict)
+    arguments: JSONObject = Field(default_factory=dict)
 
 
 class MCPCallRecord(BaseModel):
@@ -111,7 +112,7 @@ class MCPCallRecord(BaseModel):
     id: str | None = None
     server_name: str
     name: str
-    arguments: dict[str, Any] = Field(default_factory=dict)
+    arguments: JSONObject = Field(default_factory=dict)
     output: str | None = None
     error: str | None = None
 
@@ -125,10 +126,10 @@ class MCPToolDefinition:
     tool_name: str
     namespaced_name: str
     description: str
-    parameters: dict[str, Any]
+    parameters: JSONObject
     require_approval: bool
 
-    def to_openai_tool(self) -> dict[str, Any]:
+    def to_openai_tool(self) -> JSONObject:
         return {
             "type": "function",
             "name": self.namespaced_name,
@@ -142,7 +143,7 @@ def build_mcp_approval_request(
     request_id: str | None = None,
     server_name: str,
     tool_name: str,
-    arguments: dict[str, Any],
+    arguments: JSONObject,
 ) -> MCPApprovalRequest:
     return MCPApprovalRequest(
         id=request_id or f"mcp-approval-{uuid.uuid4().hex}",
@@ -170,7 +171,7 @@ def normalize_mcp_tool_result(result: mcp_types.CallToolResult) -> str:
     return json.dumps(_mcp_result_payload(result), ensure_ascii=False, default=str)
 
 
-def mcp_result_payload(result: mcp_types.CallToolResult) -> Any:
+def mcp_result_payload(result: mcp_types.CallToolResult) -> object:
     return _mcp_result_payload(result)
 
 
@@ -211,7 +212,7 @@ class MCPClientBridge:
         self,
         *,
         tool_name: str,
-        arguments: dict[str, Any],
+        arguments: JSONObject,
     ) -> mcp_types.CallToolResult:
         await self._ensure_initialized()
         return await self._session.call_tool(tool_name, arguments=arguments)
@@ -311,7 +312,7 @@ class MCPBridgeManager:
         except KeyError as exc:
             raise ToolRegistrationError(f"MCP tool '{name}' is not registered.") from exc
 
-    def to_openai_tools(self) -> list[dict[str, Any]]:
+    def to_openai_tools(self) -> list[JSONObject]:
         return [tool.to_openai_tool() for _, tool in self._tools_by_name.values()]
 
     def tool_names(self) -> set[str]:
@@ -321,7 +322,7 @@ class MCPBridgeManager:
         self,
         *,
         namespaced_name: str,
-        arguments: dict[str, Any],
+        arguments: JSONObject,
     ) -> tuple[MCPToolDefinition, mcp_types.CallToolResult]:
         bridge, tool = self._tools_by_name[namespaced_name]
         result = await bridge.call_tool(tool_name=tool.tool_name, arguments=arguments)
@@ -342,7 +343,7 @@ def run_approval_handler(
     return result
 
 
-def _empty_parameters_schema() -> dict[str, Any]:
+def _empty_parameters_schema() -> JSONObject:
     return {
         "type": "object",
         "properties": {},
@@ -350,7 +351,7 @@ def _empty_parameters_schema() -> dict[str, Any]:
     }
 
 
-def _mcp_result_payload(result: mcp_types.CallToolResult) -> Any:
+def _mcp_result_payload(result: mcp_types.CallToolResult) -> object:
     if hasattr(result, "model_dump"):
         return result.model_dump(mode="json", warnings="none")
     return result

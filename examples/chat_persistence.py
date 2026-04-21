@@ -11,7 +11,6 @@ async def main() -> None:
         await chat.run("My name is Anson.")
         await chat.run("My favorite color is teal.")
 
-        snapshot = chat.snapshot()
         payload = chat.export()
 
         print("Current chat history:")

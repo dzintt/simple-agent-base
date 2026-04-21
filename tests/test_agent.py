@@ -11,11 +11,8 @@ from pydantic import BaseModel
 
 from simple_agent_base import Agent, AgentConfig, ChatMessage, FilePart, ImagePart, TextPart, tool
 from simple_agent_base.errors import MaxTurnsExceededError, ProviderError, ToolExecutionError
-from simple_agent_base.providers.base import (
-    ConversationItem,
-    ProviderEvent,
-    ProviderResponse,
-)
+from simple_agent_base.providers.base import ProviderEvent, ProviderResponse
+from simple_agent_base.types import ConversationItem
 
 
 class FakeProvider:

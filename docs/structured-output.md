@@ -205,16 +205,7 @@ These raise an exception, typically `ProviderError`.
 
 ### `stream()` And `stream_sync()`
 
-These emit:
-
-- `AgentEvent(type="error", error="...")`
-
-Then the stream ends.
-
-This matches the package's general failure split:
-
-- final-result APIs raise
-- streaming APIs emit error events
+These also raise an exception, typically `ProviderError`.
 
 ## Raw Text Still Exists
 

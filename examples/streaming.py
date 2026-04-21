@@ -31,10 +31,10 @@ async def main() -> None:
                 print()
                 print("Structured result:")
                 print(event.result.output_data)
-            elif event.type == "error":
-                print()
-                print()
-                print(f"Stream error: {event.error}")
+    except Exception as exc:
+        print()
+        print()
+        print(f"Stream failed: {exc}")
     finally:
         await agent.aclose()
 

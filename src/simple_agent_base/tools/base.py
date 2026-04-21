@@ -3,26 +3,26 @@ from __future__ import annotations
 import inspect
 import json
 from collections.abc import Callable
-from typing import Any
+from typing import cast
 
 from pydantic import BaseModel, ConfigDict, create_model
 
 from simple_agent_base.errors import ToolDefinitionError
-from simple_agent_base.types import ToolDefinition
+from simple_agent_base.types import JSONObject, ToolDefinition
 
 TOOL_DEFINITION_ATTR = "__simple_agent_base_tool_definition__"
 TOOL_METADATA_ATTR = "__simple_agent_base_tool_metadata__"
 
 
-def extract_description(func: Callable[..., Any]) -> str:
+def extract_description(func: Callable[..., object]) -> str:
     doc = inspect.getdoc(func) or ""
     first_line = doc.strip().splitlines()[0].strip() if doc.strip() else ""
     return first_line or f"Run the {func.__name__} tool."
 
 
-def build_arguments_model(func: Callable[..., Any]) -> type[BaseModel]:
+def build_arguments_model(func: Callable[..., object]) -> type[BaseModel]:
     signature = inspect.signature(func)
-    fields: dict[str, tuple[Any, Any]] = {}
+    fields: dict[str, tuple[object, object]] = {}
 
     for parameter in signature.parameters.values():
         if parameter.kind in (inspect.Parameter.VAR_KEYWORD, inspect.Parameter.VAR_POSITIONAL):
@@ -44,12 +44,12 @@ def build_arguments_model(func: Callable[..., Any]) -> type[BaseModel]:
     )
 
 
-def build_tool_definition(func: Callable[..., Any]) -> ToolDefinition:
-    metadata = getattr(func, TOOL_METADATA_ATTR, {})
-    description = metadata.get("description") or extract_description(func)
-    name = metadata.get("name") or func.__name__
+def build_tool_definition(func: Callable[..., object]) -> ToolDefinition:
+    metadata = cast(dict[str, object], getattr(func, TOOL_METADATA_ATTR, {}))
+    description = cast(str, metadata.get("description") or extract_description(func))
+    name = cast(str, metadata.get("name") or func.__name__)
     arguments_model = build_arguments_model(func)
-    parameters = arguments_model.model_json_schema()
+    parameters = cast(JSONObject, arguments_model.model_json_schema())
 
     return ToolDefinition(
         name=name,
@@ -61,12 +61,16 @@ def build_tool_definition(func: Callable[..., Any]) -> ToolDefinition:
     )
 
 
-def dump_tool_output(value: Any) -> str:
+def get_tool_definition(func: Callable[..., object]) -> ToolDefinition | None:
+    return cast(ToolDefinition | None, getattr(func, TOOL_DEFINITION_ATTR, None))
+
+
+def dump_tool_output(value: object) -> str:
     if isinstance(value, str):
         return value
 
     if isinstance(value, BaseModel):
-        payload: Any = value.model_dump(mode="json")
+        payload: object = value.model_dump(mode="json")
     else:
         payload = value
 

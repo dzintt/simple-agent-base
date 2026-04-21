@@ -92,7 +92,6 @@ def ensure(condition: bool, message: str) -> None:
 
 
 def make_config() -> AgentConfig:
-    # Uses OPENAI_* env vars provided at runtime and adds deterministic defaults for the live check.
     return AgentConfig(temperature=0, timeout=120, max_turns=6)
 
 

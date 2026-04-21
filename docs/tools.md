@@ -318,11 +318,7 @@ These raise `ToolExecutionError` if:
 
 ### `stream()` And `stream_sync()`
 
-These convert failures into:
-
-- `AgentEvent(type="error", error="...")`
-
-Then the stream ends.
+These also raise the underlying tool or provider exception.
 
 ### Important Error Detail
 
@@ -478,7 +474,6 @@ If you want human approval, pass an `approval_handler`. The handler can be sync 
 from simple_agent_base import MCPApprovalRequest
 
 def approve(request: MCPApprovalRequest) -> bool:
-    # sync or async; return True to allow, False to deny
     return request.name in {"read_file", "list_files"}
 
 agent = Agent(

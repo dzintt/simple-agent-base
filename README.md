@@ -561,7 +561,7 @@ Important behavior:
 - the convenience `system_prompt` is sent as a `developer` message
 - if you also pass explicit `system` or `developer` messages, the package sends both
 - `chat.history` does not include the convenience prompt
-- chat snapshots store the session `system_prompt`, not a fake persisted message for it
+- chat snapshots store the session `system_prompt` separately, not as a persisted message
 
 ## Configuration
 
@@ -600,10 +600,7 @@ Notes:
 - `ToolExecutionError`
 - `MaxTurnsExceededError`
 
-Streaming behaves differently:
-
-- provider, tool, and loop failures become `AgentEvent(type="error", ...)`
-- after the `error` event, the stream ends
+`stream()` and `stream_sync()` also raise these exceptions. They do not convert failures into an `error` event.
 
 ## Examples
 

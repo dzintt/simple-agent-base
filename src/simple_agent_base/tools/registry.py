@@ -2,23 +2,23 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Iterable
-from typing import Any
+from typing import cast
 
 from simple_agent_base.errors import ToolExecutionError, ToolRegistrationError
-from simple_agent_base.types import ToolCallRequest, ToolDefinition, ToolExecutionResult
+from simple_agent_base.types import JSONObject, ToolCallRequest, ToolDefinition, ToolExecutionResult
 
-from .base import TOOL_DEFINITION_ATTR, build_tool_definition, dump_tool_output
+from .base import build_tool_definition, dump_tool_output, get_tool_definition
 
 
 class ToolRegistry:
-    def __init__(self, tools: Iterable[Callable[..., Any]] | None = None) -> None:
+    def __init__(self, tools: Iterable[Callable[..., object]] | None = None) -> None:
         self._definitions: dict[str, ToolDefinition] = {}
 
         for tool in tools or ():
             self.register(tool)
 
-    def register(self, tool_fn: Callable[..., Any]) -> None:
-        definition = getattr(tool_fn, TOOL_DEFINITION_ATTR, None) or build_tool_definition(tool_fn)
+    def register(self, tool_fn: Callable[..., object]) -> None:
+        definition = get_tool_definition(tool_fn) or build_tool_definition(tool_fn)
 
         if definition.name in self._definitions:
             raise ToolRegistrationError(f"Tool '{definition.name}' is already registered.")
@@ -34,7 +34,7 @@ class ToolRegistry:
     def list_definitions(self) -> list[ToolDefinition]:
         return list(self._definitions.values())
 
-    def to_openai_tools(self) -> list[dict[str, Any]]:
+    def to_openai_tools(self) -> list[JSONObject]:
         return [
             {
                 "type": "function",
@@ -51,7 +51,7 @@ class ToolRegistry:
 
         try:
             validated = definition.arguments_model.model_validate(call.arguments)
-            arguments = validated.model_dump(mode="python")
+            arguments = cast(dict[str, object], validated.model_dump(mode="python"))
             if definition.is_async:
                 raw_output = await definition.func(**arguments)
             else:

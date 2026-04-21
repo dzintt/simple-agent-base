@@ -10,7 +10,6 @@ async def ping(message: str) -> str:
 
 
 async def main() -> None:
-    # Smallest useful setup: one agent, one tool, one prompt.
     agent = Agent(
         config=AgentConfig(model="gpt-5.4"),
         tools=[ping],

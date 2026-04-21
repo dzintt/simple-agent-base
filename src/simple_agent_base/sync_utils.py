@@ -85,11 +85,7 @@ class SyncRuntime:
                 future.cancel()
             try:
                 future.result(timeout=1.0)
-            except (
-                Exception,
-                concurrent.futures.CancelledError,
-                TimeoutError,
-            ):
+            except (concurrent.futures.CancelledError, TimeoutError):
                 pass
 
     def close(self) -> None:

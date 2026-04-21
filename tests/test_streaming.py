@@ -8,13 +8,14 @@ import pytest
 from pydantic import BaseModel
 
 from simple_agent_base import Agent, AgentConfig, ChatMessage, ChatSnapshot, tool
+from simple_agent_base.errors import ToolExecutionError
 from simple_agent_base.providers.base import (
-    ConversationItem,
     ProviderCompletedEvent,
     ProviderEvent,
     ProviderResponse,
     ProviderTextDeltaEvent,
 )
+from simple_agent_base.types import ConversationItem
 
 
 class FakeStreamingProvider:
@@ -391,28 +392,24 @@ async def test_stream_parallel_batch_emits_deterministic_lifecycle_events() -> N
 
 
 @pytest.mark.asyncio
-async def test_stream_yields_error_event_on_provider_failure() -> None:
+async def test_stream_raises_on_provider_failure() -> None:
     agent = Agent(
         config=AgentConfig(model="gpt-5"),
         provider=ExplodingStreamingProvider([]),
     )
 
-    events = [event async for event in agent.stream("Fail.")]
-
-    assert [event.type for event in events] == ["error"]
-    assert events[0].error == "stream failed"
+    with pytest.raises(RuntimeError, match="stream failed"):
+        [event async for event in agent.stream("Fail.")]
 
 
-def test_stream_sync_yields_error_event_on_provider_failure() -> None:
+def test_stream_sync_raises_on_provider_failure() -> None:
     agent = Agent(
         config=AgentConfig(model="gpt-5"),
         provider=ExplodingStreamingProvider([]),
     )
 
-    events = list(agent.stream_sync("Fail."))
-
-    assert [event.type for event in events] == ["error"]
-    assert events[0].error == "stream failed"
+    with pytest.raises(RuntimeError, match="stream failed"):
+        list(agent.stream_sync("Fail."))
 
 
 def test_chat_session_stream_sync_preserves_history() -> None:
@@ -677,7 +674,7 @@ async def test_stream_returns_structured_output_after_tool_turn() -> None:
 
 
 @pytest.mark.asyncio
-async def test_stream_parallel_tool_failure_yields_error_event() -> None:
+async def test_stream_parallel_tool_failure_raises() -> None:
     provider = FakeStreamingProvider(
         [
             [
@@ -711,13 +708,7 @@ async def test_stream_parallel_tool_failure_yields_error_event() -> None:
         provider=provider,
     )
 
-    events = [event async for event in agent.stream("Fail with parallel tools.")]
-
-    assert [event.type for event in events] == [
-        "tool_call_started",
-        "tool_call_started",
-        "error",
-    ]
-    assert events[-1].error is not None
+    with pytest.raises(ToolExecutionError, match="boom"):
+        [event async for event in agent.stream("Fail with parallel tools.")]
 
 

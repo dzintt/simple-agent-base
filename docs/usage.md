@@ -38,8 +38,8 @@ from simple_agent_base import Agent, AgentConfig
 
 agent = Agent(
     config=AgentConfig(model="gpt-5.4"),
-    tools=[...],          # optional
-    system_prompt="...",  # optional
+    tools=[...],
+    system_prompt="...",
 )
 ```
 
@@ -520,7 +520,7 @@ restored = agent.chat_from_snapshot(payload)
 - snapshots do not restore `AgentConfig`
 - snapshots do not restore registered tools
 - snapshots do not restore the provider instance
-- convenience prompts are stored as `system_prompt`, not as a persisted developer message item
+- convenience prompts are stored as `system_prompt` separately, not as a persisted message
 
 ### Streaming And Snapshots
 
@@ -630,11 +630,7 @@ For `run()` and `run_sync()`, runtime failures raise exceptions such as:
 - `ToolExecutionError`
 - `MaxTurnsExceededError`
 
-For `stream()` and `stream_sync()`, runtime failures become:
-
-- `AgentEvent(type="error", error="...")`
-
-The stream ends after the error event.
+For `stream()` and `stream_sync()`, the same runtime failures raise exceptions.
 
 ## Examples
 

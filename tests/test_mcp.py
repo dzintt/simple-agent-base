@@ -18,12 +18,8 @@ from pydantic import BaseModel, ValidationError
 from simple_agent_base import Agent, AgentConfig, MCPServer, tool
 from simple_agent_base.errors import MCPApprovalRequiredError, ToolExecutionError, ToolRegistrationError
 from simple_agent_base.mcp import normalize_mcp_tool_result
-from simple_agent_base.providers.base import (
-    ConversationItem,
-    ProviderCompletedEvent,
-    ProviderEvent,
-    ProviderResponse,
-)
+from simple_agent_base.providers.base import ProviderCompletedEvent, ProviderEvent, ProviderResponse
+from simple_agent_base.types import ConversationItem
 import simple_agent_base.mcp as mcp_module
 
 FIXTURE_SERVER = Path(__file__).parent / "fixtures" / "mcp_demo_server.py"

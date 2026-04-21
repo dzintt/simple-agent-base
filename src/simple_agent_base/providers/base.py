@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Sequence
-from typing import Any, Literal, Protocol
+from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from simple_agent_base.types import ToolCallRequest
-
-ConversationItem = dict[str, Any]
-
+from simple_agent_base.types import ConversationItem, JSONObject, ToolCallRequest
 
 class ProviderResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -18,7 +15,7 @@ class ProviderResponse(BaseModel):
     output_data: BaseModel | None = None
     tool_calls: list[ToolCallRequest] = Field(default_factory=list)
     output_items: list[ConversationItem] = Field(default_factory=list)
-    raw_response: dict[str, Any] | None = None
+    raw_response: JSONObject | None = None
 
 
 class ProviderTextDeltaEvent(BaseModel):
@@ -42,7 +39,7 @@ class Provider(Protocol):
         self,
         *,
         input_items: Sequence[ConversationItem],
-        tools: Sequence[dict[str, Any]],
+        tools: Sequence[JSONObject],
         response_model: type[BaseModel] | None = None,
     ) -> ProviderResponse: ...
 
@@ -50,7 +47,7 @@ class Provider(Protocol):
         self,
         *,
         input_items: Sequence[ConversationItem],
-        tools: Sequence[dict[str, Any]],
+        tools: Sequence[JSONObject],
         response_model: type[BaseModel] | None = None,
     ) -> AsyncIterator[ProviderEvent]: ...
 
