@@ -28,7 +28,7 @@ from simple_agent_base.mcp import (
     normalize_mcp_tool_result,
     run_approval_handler,
 )
-from simple_agent_base.providers.base import Provider
+from simple_agent_base.providers.base import Provider, ProviderResponse
 from simple_agent_base.providers.openai import OpenAIResponsesProvider
 from simple_agent_base.sync_utils import SyncRuntime, ensure_sync_allowed, run_sync_awaitable
 from simple_agent_base.tools import ToolRegistry
@@ -208,10 +208,8 @@ class Agent:
             transcript.extend(response.output_items)
 
             if not response.tool_calls:
-                return AgentRunResult(
-                    output_text=response.output_text,
-                    output_data=response.output_data,
-                    response_id=response.response_id,
+                return self._build_run_result(
+                    response=response,
                     tool_results=tool_results,
                     mcp_calls=mcp_calls,
                     raw_responses=raw_responses,
@@ -246,8 +244,8 @@ class Agent:
                 tools=self._build_tool_params(),
                 response_model=response_model,
             ):
-                if event.type == "text_delta":
-                    yield AgentEvent(type="text_delta", delta=event.delta)
+                if event.type in {"text_delta", "reasoning_delta"}:
+                    yield AgentEvent(type=event.type, delta=event.delta)
                 elif event.type == "completed":
                     final_response = event.response
 
@@ -258,10 +256,8 @@ class Agent:
             transcript.extend(final_response.output_items)
 
             if not final_response.tool_calls:
-                result = AgentRunResult(
-                    output_text=final_response.output_text,
-                    output_data=final_response.output_data,
-                    response_id=final_response.response_id,
+                result = self._build_run_result(
+                    response=final_response,
                     tool_results=tool_results,
                     mcp_calls=mcp_calls,
                     raw_responses=raw_responses,
@@ -397,6 +393,24 @@ class Agent:
         tools = list(self.registry.to_openai_tools())
         tools.extend(self._mcp_manager.to_openai_tools())
         return tools
+
+    @staticmethod
+    def _build_run_result(
+        *,
+        response: ProviderResponse,
+        tool_results: list[ToolExecutionResult],
+        mcp_calls: list[MCPCallRecord],
+        raw_responses: list[JSONObject],
+    ) -> AgentRunResult:
+        return AgentRunResult(
+            output_text=response.output_text,
+            reasoning_summary=response.reasoning_summary,
+            output_data=response.output_data,
+            response_id=response.response_id,
+            tool_results=tool_results,
+            mcp_calls=mcp_calls,
+            raw_responses=raw_responses,
+        )
 
     async def _execute_mcp_tool(
         self,

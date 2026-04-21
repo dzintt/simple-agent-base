@@ -12,6 +12,7 @@ from simple_agent_base.errors import ToolExecutionError
 from simple_agent_base.providers.base import (
     ProviderCompletedEvent,
     ProviderEvent,
+    ProviderReasoningDeltaEvent,
     ProviderResponse,
     ProviderTextDeltaEvent,
 )
@@ -89,6 +90,25 @@ class Summary(BaseModel):
     bullets: list[str]
 
 
+REASONING_PROMPT = "Think carefully, then answer with exactly reasoning-ok."
+REASONING_SUMMARY = "Checking the exact-output constraint."
+
+
+def make_reasoning_stream(provider_summary: str = REASONING_SUMMARY) -> list[ProviderEvent]:
+    return [
+        ProviderReasoningDeltaEvent(delta=provider_summary),
+        ProviderCompletedEvent(
+            response=ProviderResponse(
+                response_id="resp_1",
+                output_text="reasoning-ok",
+                reasoning_summary=provider_summary,
+                output_items=[],
+                raw_response={"id": "resp_1"},
+            )
+        ),
+    ]
+
+
 @pytest.mark.asyncio
 async def test_stream_yields_text_delta_events() -> None:
     provider = FakeStreamingProvider(
@@ -112,6 +132,16 @@ async def test_stream_yields_text_delta_events() -> None:
     events = [event async for event in agent.stream("Say hello.")]
 
     assert [event.delta for event in events if event.type == "text_delta"] == ["Hel", "lo"]
+
+
+@pytest.mark.asyncio
+async def test_stream_yields_reasoning_delta_events() -> None:
+    provider = FakeStreamingProvider([make_reasoning_stream()])
+    agent = Agent(config=AgentConfig(model="gpt-5"), provider=provider)
+
+    events = [event async for event in agent.stream(REASONING_PROMPT)]
+
+    assert [event.delta for event in events if event.type == "reasoning_delta"] == [REASONING_SUMMARY]
 
 
 def test_stream_sync_yields_text_delta_and_completed_events() -> None:
@@ -139,6 +169,15 @@ def test_stream_sync_yields_text_delta_and_completed_events() -> None:
     assert events[-1].type == "completed"
     assert events[-1].result is not None
     assert events[-1].result.output_text == "Hello"
+
+
+def test_stream_sync_yields_reasoning_delta_events() -> None:
+    provider = FakeStreamingProvider([make_reasoning_stream()])
+    agent = Agent(config=AgentConfig(model="gpt-5"), provider=provider)
+
+    events = list(agent.stream_sync(REASONING_PROMPT))
+
+    assert [event.delta for event in events if event.type == "reasoning_delta"] == [REASONING_SUMMARY]
 
 
 @pytest.mark.asyncio
@@ -182,6 +221,18 @@ async def test_stream_prepends_run_level_system_prompt() -> None:
             "content": "Say hello.",
         },
     ]
+
+
+@pytest.mark.asyncio
+async def test_stream_completed_result_includes_reasoning_summary() -> None:
+    provider = FakeStreamingProvider([make_reasoning_stream()])
+    agent = Agent(config=AgentConfig(model="gpt-5"), provider=provider)
+
+    events = [event async for event in agent.stream(REASONING_PROMPT)]
+
+    assert events[-1].type == "completed"
+    assert events[-1].result is not None
+    assert events[-1].result.reasoning_summary == REASONING_SUMMARY
 
 
 @pytest.mark.asyncio

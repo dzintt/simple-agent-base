@@ -12,6 +12,7 @@ class ProviderResponse(BaseModel):
 
     response_id: str | None = None
     output_text: str = ""
+    reasoning_summary: str | None = None
     output_data: BaseModel | None = None
     tool_calls: list[ToolCallRequest] = Field(default_factory=list)
     output_items: list[ConversationItem] = Field(default_factory=list)
@@ -25,13 +26,20 @@ class ProviderTextDeltaEvent(BaseModel):
     delta: str
 
 
+class ProviderReasoningDeltaEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["reasoning_delta"] = "reasoning_delta"
+    delta: str
+
+
 class ProviderCompletedEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["completed"] = "completed"
     response: ProviderResponse
 
-ProviderEvent = ProviderTextDeltaEvent | ProviderCompletedEvent
+ProviderEvent = ProviderTextDeltaEvent | ProviderReasoningDeltaEvent | ProviderCompletedEvent
 
 
 class Provider(Protocol):

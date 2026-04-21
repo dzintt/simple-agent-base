@@ -115,6 +115,7 @@ asyncio.run(main())
 `agent.run(...)` returns an `AgentRunResult`:
 
 - `output_text`: final assistant text
+- `reasoning_summary`: final reasoning summary when reasoning is enabled and the backend returns one
 - `output_data`: parsed Pydantic object when you pass `response_model=...`
 - `tool_results`: local tool results from the run
 - `response_id`: provider response id when available
@@ -170,18 +171,40 @@ Use `stream(...)` when you want incremental text or tool lifecycle events:
 async for event in agent.stream("Explain async IO in one sentence."):
     if event.type == "text_delta" and event.delta:
         print(event.delta, end="")
+    elif event.type == "reasoning_delta" and event.delta:
+        print(f"[reasoning] {event.delta}")
     elif event.type == "completed" and event.result is not None:
         print()
         print(event.result.output_text)
+        print(event.result.reasoning_summary)
 ```
 
 Streaming event types:
 
 - `text_delta`
+- `reasoning_delta`
 - `tool_call_started`
 - `tool_call_completed`
 - `completed`
-- `error`
+
+### Reasoning
+
+Enable reasoning through `AgentConfig.reasoning_effort`:
+
+```python
+agent = Agent(
+    config=AgentConfig(
+        model="gpt-5.4",
+        reasoning_effort="high",
+    )
+)
+```
+
+When reasoning is enabled:
+
+- the provider sends `reasoning={"effort": ..., "summary": "auto"}`
+- streamed reasoning summaries arrive as `reasoning_delta` events
+- the final `AgentRunResult` may include `reasoning_summary`
 
 ### Tools
 
@@ -574,6 +597,7 @@ AgentConfig(
     base_url=None,
     max_turns=8,
     parallel_tool_calls=False,
+    reasoning_effort=None,
     temperature=None,
     timeout=None,
 )
@@ -584,6 +608,7 @@ Environment variables:
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL`
 - `OPENAI_BASE_URL`
+- `OPENAI_REASONING_EFFORT`
 
 Notes:
 

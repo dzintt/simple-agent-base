@@ -11,7 +11,12 @@ class Summary(BaseModel):
 
 
 async def main() -> None:
-    agent = Agent(config=AgentConfig(model="gpt-5.4"))
+    agent = Agent(
+        config=AgentConfig(
+            model="gpt-5.4",
+            reasoning_effort="high",
+        )
+    )
 
     try:
         async for event in agent.stream(
@@ -20,6 +25,9 @@ async def main() -> None:
         ):
             if event.type == "text_delta" and event.delta is not None:
                 print(event.delta, end="")
+            elif event.type == "reasoning_delta" and event.delta is not None:
+                print()
+                print(f"[reasoning] {event.delta}")
             elif event.type == "tool_call_started" and event.tool_call is not None:
                 print()
                 print(f"[tool start] {event.tool_call.name}")
@@ -28,6 +36,9 @@ async def main() -> None:
                 print(f"[tool done] {event.tool_result.name}: {event.tool_result.output}")
             elif event.type == "completed" and event.result is not None:
                 print()
+                print()
+                print("Reasoning summary:")
+                print(event.result.reasoning_summary)
                 print()
                 print("Structured result:")
                 print(event.result.output_data)

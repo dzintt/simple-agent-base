@@ -108,6 +108,20 @@ class WeatherAnswer(BaseModel):
     summary: str
 
 
+REASONING_PROMPT = "Think carefully, then answer with exactly reasoning-ok."
+REASONING_SUMMARY = "I checked the constraint and kept the answer exact."
+
+
+def make_reasoning_response(*, reasoning_summary: str | None) -> ProviderResponse:
+    return ProviderResponse(
+        response_id="resp_1",
+        output_text="reasoning-ok",
+        reasoning_summary=reasoning_summary,
+        output_items=[],
+        raw_response={"id": "resp_1"},
+    )
+
+
 @pytest.mark.asyncio
 async def test_run_without_tools_returns_plain_text() -> None:
     provider = FakeProvider(
@@ -133,6 +147,28 @@ async def test_run_without_tools_returns_plain_text() -> None:
     assert result.output_text == "hello world"
     assert result.output_data is None
     assert result.tool_results == []
+
+
+@pytest.mark.asyncio
+async def test_run_returns_reasoning_summary_when_provider_supplies_it() -> None:
+    provider = FakeProvider([make_reasoning_response(reasoning_summary=REASONING_SUMMARY)])
+    agent = Agent(config=AgentConfig(model="gpt-5"), provider=provider)
+
+    result = await agent.run(REASONING_PROMPT)
+
+    assert result.output_text == "reasoning-ok"
+    assert result.reasoning_summary == REASONING_SUMMARY
+
+
+@pytest.mark.asyncio
+async def test_run_returns_none_reasoning_summary_when_provider_supplies_none() -> None:
+    provider = FakeProvider([make_reasoning_response(reasoning_summary=None)])
+    agent = Agent(config=AgentConfig(model="gpt-5"), provider=provider)
+
+    result = await agent.run(REASONING_PROMPT)
+
+    assert result.output_text == "reasoning-ok"
+    assert result.reasoning_summary is None
 
 
 def test_run_sync_returns_plain_text() -> None:

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator, Sequence
+from dataclasses import dataclass, field
+from io import StringIO
 from typing import cast
 
 from pydantic import BaseModel
@@ -14,9 +16,39 @@ from simple_agent_base.types import ConversationItem, JSONObject, ToolCallReques
 from .base import (
     ProviderCompletedEvent,
     ProviderEvent,
+    ProviderReasoningDeltaEvent,
     ProviderResponse,
     ProviderTextDeltaEvent,
 )
+
+
+@dataclass(slots=True)
+class _ReasoningSummaryAccumulator:
+    buffer: StringIO = field(default_factory=StringIO)
+    seen_keys: set[tuple[str | None, int | None]] = field(default_factory=set)
+
+    def add_delta(self, event: object) -> str:
+        self.seen_keys.add(self._key_for(event))
+        delta = getattr(event, "delta", "")
+        if delta:
+            self.buffer.write(delta)
+        return delta
+
+    def add_done_fallback(self, event: object) -> None:
+        if self._key_for(event) in self.seen_keys:
+            return
+
+        text = getattr(event, "text", "")
+        if text:
+            self.buffer.write(text)
+
+    def build(self) -> str | None:
+        summary = self.buffer.getvalue().strip()
+        return summary or None
+
+    @staticmethod
+    def _key_for(event: object) -> tuple[str | None, int | None]:
+        return (getattr(event, "item_id", None), getattr(event, "summary_index", None))
 
 
 class OpenAIResponsesProvider:
@@ -55,6 +87,8 @@ class OpenAIResponsesProvider:
         tools: Sequence[JSONObject],
         response_model: type[BaseModel] | None = None,
     ) -> AsyncIterator[ProviderEvent]:
+        reasoning_summary = _ReasoningSummaryAccumulator()
+
         try:
             async with self._client.responses.stream(
                 **self._request_kwargs(input_items, tools, response_model=response_model)
@@ -62,12 +96,19 @@ class OpenAIResponsesProvider:
                 async for event in stream:
                     if event.type == "response.output_text.delta":
                         yield ProviderTextDeltaEvent(delta=event.delta)
+                    elif event.type == "response.reasoning_summary_text.delta":
+                        yield ProviderReasoningDeltaEvent(delta=reasoning_summary.add_delta(event))
+                    elif event.type == "response.reasoning_summary_text.done":
+                        reasoning_summary.add_done_fallback(event)
 
                 final_response = await stream.get_final_response()
         except Exception as exc:
             raise ProviderError(f"OpenAI streaming response request failed: {exc}") from exc
 
-        yield ProviderCompletedEvent(response=self._convert_response(final_response))
+        response = self._convert_response(final_response)
+        if response.reasoning_summary is None:
+            response.reasoning_summary = reasoning_summary.build()
+        yield ProviderCompletedEvent(response=response)
 
     async def close(self) -> None:
         await self._client.close()
@@ -86,6 +127,12 @@ class OpenAIResponsesProvider:
 
         if tools:
             kwargs["tools"] = list(tools)
+
+        if self._config.reasoning_effort is not None:
+            kwargs["reasoning"] = {
+                "effort": self._config.reasoning_effort,
+                "summary": "auto",
+            }
 
         if self._config.temperature is not None:
             kwargs["temperature"] = self._config.temperature
@@ -129,11 +176,39 @@ class OpenAIResponsesProvider:
         return ProviderResponse(
             response_id=getattr(response, "id", None),
             output_text=getattr(response, "output_text", ""),
+            reasoning_summary=self._extract_reasoning_summary(response),
             output_data=cast(BaseModel | None, getattr(response, "output_parsed", None)),
             tool_calls=tool_calls,
             output_items=output_items,
             raw_response=self._to_dict(response),
         )
+
+    def _extract_reasoning_summary(self, response: BaseModel) -> str | None:
+        reasoning_summaries = [
+            summary
+            for item in getattr(response, "output", [])
+            if getattr(item, "type", None) == "reasoning"
+            if (summary := self._join_non_empty_texts(getattr(item, "summary", []) or [])) is not None
+        ]
+        return self._join_non_empty_texts(reasoning_summaries, separator="\n\n")
+
+    @staticmethod
+    def _join_non_empty_texts(parts: Sequence[object], *, separator: str = "") -> str | None:
+        cleaned_parts: list[str] = []
+        for part in parts:
+            text = getattr(part, "text", part)
+            if not isinstance(text, str):
+                continue
+
+            stripped = text.strip()
+            if stripped:
+                cleaned_parts.append(stripped)
+
+        if not cleaned_parts:
+            return None
+
+        summary = separator.join(cleaned_parts).strip()
+        return summary or None
 
     @staticmethod
     def _to_dict(value: object) -> JSONObject:

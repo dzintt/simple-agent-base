@@ -237,6 +237,7 @@ class AgentRunResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     output_text: str
+    reasoning_summary: str | None = None
     output_data: BaseModel | None = None
     response_id: str | None = None
     tool_results: list[ToolExecutionResult] = Field(default_factory=list)
@@ -249,6 +250,7 @@ class AgentEvent(BaseModel):
 
     type: Literal[
         "text_delta",
+        "reasoning_delta",
         "tool_call_started",
         "tool_call_completed",
         "mcp_call_started",

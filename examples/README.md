@@ -23,8 +23,9 @@ If you are new to the repo, read these in this order:
 1. `basic_agent.py`
 2. `structured_output.py`
 3. `streaming.py`
-4. `chat_session.py`
-5. `parallel_tools.py`
+4. `reasoning.py`
+5. `chat_session.py`
+6. `parallel_tools.py`
 
 ## Example Guide
 
@@ -56,6 +57,16 @@ Shows:
 
 - `agent.stream_sync(...)`
 - handling `text_delta` and `completed` events
+
+### `reasoning.py`
+
+Use this when you want to request reasoning and inspect the streamed summary.
+
+Shows:
+
+- `AgentConfig(reasoning_effort="high")`
+- handling `reasoning_delta`
+- reading `result.reasoning_summary`
 
 ### `chat_session.py`
 
@@ -172,7 +183,7 @@ Shows:
 
 - `agent.stream(...)`
 - `text_delta`
+- `reasoning_delta`
 - `tool_call_started`
 - `tool_call_completed`
 - `completed`
-- `error`

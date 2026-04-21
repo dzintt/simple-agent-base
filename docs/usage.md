@@ -319,6 +319,8 @@ Fields:
 
 - `output_text`
   Final assistant text from the provider.
+- `reasoning_summary`
+  Final reasoning summary when reasoning is enabled and the backend returns one.
 - `output_data`
   Parsed Pydantic object when you use `response_model=...`. Otherwise `None`.
 - `response_id`
@@ -338,24 +340,32 @@ Example:
 async for event in agent.stream("Explain async IO in one sentence."):
     if event.type == "text_delta" and event.delta:
         print(event.delta, end="")
+    elif event.type == "reasoning_delta" and event.delta:
+        print(f"[reasoning] {event.delta}")
     elif event.type == "completed" and event.result is not None:
         print()
         print(event.result.output_text)
+        print(event.result.reasoning_summary)
 ```
 
 Event types:
 
 - `text_delta`
+- `reasoning_delta`
 - `tool_call_started`
 - `tool_call_completed`
 - `completed`
-- `error`
 
 ### Streaming Event Semantics
 
 `text_delta`
 
 - emitted for incremental text from the provider
+- contains `delta`
+
+`reasoning_delta`
+
+- emitted for incremental reasoning summary text from the provider
 - contains `delta`
 
 `tool_call_started`
@@ -374,18 +384,29 @@ Event types:
 - emitted once, after the final assistant answer is available
 - contains the final `AgentRunResult`
 
-`error`
-
-- emitted once if the provider, tool loop, or stream processing fails
-- contains the error string
-- ends the stream
-
 ### Important Streaming Behavior
 
-- `stream()` does not raise normal runtime failures the same way `run()` does
-- instead, runtime failures become a final `error` event
 - structured output only appears on the final `completed` event
 - if a tool batch runs during a streamed request, you will see tool lifecycle events between turns
+
+## Reasoning
+
+You can enable reasoning through `AgentConfig.reasoning_effort`.
+
+```python
+agent = Agent(
+    config=AgentConfig(
+        model="gpt-5.4",
+        reasoning_effort="high",
+    )
+)
+```
+
+Behavior:
+
+- when set, the provider sends `reasoning={"effort": ..., "summary": "auto"}`
+- streamed reasoning summary text is surfaced as `reasoning_delta`
+- the final `AgentRunResult` may include `reasoning_summary`
 
 ## System Prompts
 
@@ -601,6 +622,7 @@ AgentConfig(
     base_url=None,
     max_turns=8,
     parallel_tool_calls=False,
+    reasoning_effort=None,
     temperature=None,
     timeout=None,
 )
@@ -611,6 +633,7 @@ Environment variables:
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL`
 - `OPENAI_BASE_URL`
+- `OPENAI_REASONING_EFFORT`
 
 Field behavior:
 
@@ -619,6 +642,7 @@ Field behavior:
 - `base_url` points the provider at an OpenAI-compatible endpoint
 - `max_turns` limits tool-call loops
 - `parallel_tool_calls` enables same-turn parallel local tool execution
+- `reasoning_effort` is optional and, when set, requests a reasoning summary
 - `temperature` is optional and only sent if set
 - `timeout` is optional and only sent if set
 
