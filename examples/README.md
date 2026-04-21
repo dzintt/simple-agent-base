@@ -153,6 +153,17 @@ Shows:
 - reading `result.mcp_calls`
 - an `approval_handler` with `require_approval=True`
 
+### `mcp_http_server.py`
+
+Use this when you want the same client-side MCP bridge flow over streamable HTTP.
+
+Shows:
+
+- `MCPServer.http(...)`
+- starting a local demo HTTP MCP server
+- reading `result.mcp_calls`
+- an `approval_handler` with `require_approval=True`
+
 ### `streaming.py`
 
 Use this when you want progressive output or tool lifecycle events.

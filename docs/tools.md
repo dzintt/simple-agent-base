@@ -416,7 +416,7 @@ asyncio.run(main())
 
 ## MCP Servers
 
-Note: the MCP support in this package is client-side only. The hosted OpenAI `{"type":"mcp"}` model is no longer supported. Prefer `MCPServer.stdio(...)` or `MCPServer.http(...)` as shown in [examples/mcp_server.py](../examples/mcp_server.py).
+Note: MCP support in this package is client-side only. Hosted OpenAI `{"type":"mcp"}` models are not supported. Use `MCPServer.stdio(...)` or `MCPServer.http(...)` as demonstrated in [examples/mcp_server.py](../examples/mcp_server.py) and [examples/mcp_http_server.py](../examples/mcp_http_server.py).
 
 In addition to local Python tools, you can give the model access to MCP (Model Context Protocol) servers that this library connects to directly. The agent discovers the remote tools locally, exposes them to the model as normal function tools, executes the chosen MCP call locally, and records each invocation in `AgentRunResult.mcp_calls`.
 
@@ -447,13 +447,13 @@ agent = Agent(
 
 `MCPServer` has two constructors:
 
-| Field | Purpose |
-| --- | --- |
-| `MCPServer.stdio(name=..., command=..., args=..., env=..., cwd=...)` | Start an MCP server as a local subprocess and connect over stdio. |
-| `MCPServer.http(name=..., url=..., headers=...)` | Connect to a streamable HTTP MCP server. |
-| `name` | Required server identifier used to namespace discovered tools. |
-| `allowed_tools` | Optional `list[str]` of MCP tool names to expose to the model. |
-| `require_approval` | If `True`, the local `approval_handler` runs before each MCP call. |
+| Field                                                                | Purpose                                                            |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `MCPServer.stdio(name=..., command=..., args=..., env=..., cwd=...)` | Start an MCP server as a local subprocess and connect over stdio.  |
+| `MCPServer.http(name=..., url=..., headers=...)`                     | Connect to a streamable HTTP MCP server.                           |
+| `name`                                                               | Required server identifier used to namespace discovered tools.     |
+| `allowed_tools`                                                      | Optional `list[str]` of MCP tool names to expose to the model.     |
+| `require_approval`                                                   | If `True`, the local `approval_handler` runs before each MCP call. |
 
 ### Approvals
 
@@ -505,4 +505,3 @@ When streaming, three additional event types are emitted:
 - `mcp_call_started`
 - `mcp_call_completed`
 - `mcp_approval_requested`
-
