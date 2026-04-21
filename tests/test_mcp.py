@@ -8,7 +8,6 @@ from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 from typing import Any
 
-import httpx
 import pytest
 from mcp import types as mcp_types
 from pydantic import BaseModel, ValidationError

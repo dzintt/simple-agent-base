@@ -289,8 +289,6 @@ for call in result.mcp_calls:
 
 This package supports client-side MCP only. The library owns the MCP connection, discovers tools locally, exposes them to the model as function tools, executes the chosen MCP call locally, and records the activity in `result.mcp_calls`.
 
-MCP servers are sent to the OpenAI Responses API as hosted tools — OpenAI handles tool discovery, invocation, and result streaming. Nothing runs locally.
-
 `MCPServer` fields:
 
 - `name`: required server identifier used to namespace discovered tools

@@ -14,7 +14,7 @@ from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from simple_agent_base.errors import ToolExecutionError, ToolRegistrationError
+from simple_agent_base.errors import ToolRegistrationError
 
 
 class MCPServer(BaseModel):
