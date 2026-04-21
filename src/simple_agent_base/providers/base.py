@@ -34,7 +34,6 @@ class ProviderCompletedEvent(BaseModel):
     type: Literal["completed"] = "completed"
     response: ProviderResponse
 
-
 ProviderEvent = ProviderTextDeltaEvent | ProviderCompletedEvent
 
 

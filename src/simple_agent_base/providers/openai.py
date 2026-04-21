@@ -11,7 +11,13 @@ from simple_agent_base.config import AgentConfig
 from simple_agent_base.errors import ProviderError
 from simple_agent_base.types import ToolCallRequest
 
-from .base import ConversationItem, ProviderCompletedEvent, ProviderResponse, ProviderTextDeltaEvent
+from .base import (
+    ConversationItem,
+    ProviderCompletedEvent,
+    ProviderEvent,
+    ProviderResponse,
+    ProviderTextDeltaEvent,
+)
 
 
 class OpenAIResponsesProvider:
@@ -49,7 +55,7 @@ class OpenAIResponsesProvider:
         input_items: Sequence[ConversationItem],
         tools: Sequence[dict[str, Any]],
         response_model: type[BaseModel] | None = None,
-    ) -> AsyncIterator[ProviderTextDeltaEvent | ProviderCompletedEvent]:
+    ) -> AsyncIterator[ProviderEvent]:
         try:
             async with self._client.responses.stream(
                 **self._request_kwargs(input_items, tools, response_model=response_model)

@@ -134,6 +134,9 @@ Most projects only need these exports:
 - `ChatSnapshot`
 - `ToolRegistry`
 - `tool`
+- `MCPServer`
+- `MCPApprovalRequest`
+- `MCPCallRecord`
 
 ## How It Works
 
@@ -253,6 +256,96 @@ Bad fits:
 - create invoice, then email invoice
 - checkout, then send receipt
 - anything that depends on ordering or shared mutable state
+
+### MCP Servers
+
+Give the model access to a client-side MCP server by passing `mcp_servers` to the agent:
+
+```python
+import sys
+from pathlib import Path
+
+from simple_agent_base import Agent, AgentConfig, MCPServer
+
+fixture_server = Path("tests/fixtures/mcp_demo_server.py").resolve()
+
+agent = Agent(
+    config=AgentConfig(model="gpt-5.4"),
+    mcp_servers=[
+        MCPServer.stdio(
+            name="demo",
+            command=sys.executable,
+            args=[str(fixture_server), "stdio"],
+            require_approval=False,
+        )
+    ],
+)
+
+result = await agent.run("Use the demo MCP echo tool with the message 'hello'.")
+print(result.output_text)
+for call in result.mcp_calls:
+    print(call.server_name, call.name, call.arguments)
+```
+
+This package supports client-side MCP only. The library owns the MCP connection, discovers tools locally, exposes them to the model as function tools, executes the chosen MCP call locally, and records the activity in `result.mcp_calls`.
+
+`MCPServer` fields:
+
+- `name`: required server identifier used to namespace discovered tools
+- `allowed_tools`: optional list of MCP tool names to expose
+- `require_approval`: if `True`, the local `approval_handler` is invoked before each MCP call
+- `MCPServer.stdio(...)`: configure a subprocess-backed MCP server
+- `MCPServer.http(...)`: configure a streamable HTTP MCP server
+
+For trusted public or read-only servers, set `require_approval=False` to skip approval plumbing:
+
+```python
+import sys
+from pathlib import Path
+
+fixture_server = Path("tests/fixtures/mcp_demo_server.py").resolve()
+
+agent = Agent(
+    config=AgentConfig(model="gpt-5.4"),
+    mcp_servers=[
+        MCPServer.stdio(
+            name="demo",
+            command=sys.executable,
+            args=[str(fixture_server), "stdio"],
+            require_approval=False,
+        )
+    ],
+)
+```
+
+To gate tools, set `require_approval=True` and pass an `approval_handler`:
+
+```python
+from simple_agent_base import MCPApprovalRequest
+
+def approve(request: MCPApprovalRequest) -> bool:
+    return input(f"Run {request.server_name}.{request.name}? [y/N] ").lower() == "y"
+
+agent = Agent(
+    config=AgentConfig(model="gpt-5.4"),
+    mcp_servers=[
+        MCPServer.http(
+            name="gh",
+            url="http://127.0.0.1:8000/mcp",
+            require_approval=True,
+        )
+    ],
+    approval_handler=approve,
+)
+```
+
+The handler can be sync or async. If approvals are requested and no handler is set, the package raises `MCPApprovalRequiredError`.
+
+Streaming surfaces three new event types alongside the existing ones:
+
+- `mcp_call_started`
+- `mcp_call_completed`
+- `mcp_approval_requested`
 
 ### Structured Output
 

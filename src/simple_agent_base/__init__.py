@@ -1,6 +1,8 @@
 from .agent import Agent
 from .chat import ChatSession
 from .config import AgentConfig
+from .errors import MCPApprovalRequiredError
+from .mcp import ApprovalHandler, MCPApprovalRequest, MCPCallRecord, MCPServer
 from .tools import ToolRegistry, tool
 from .types import (
     AgentEvent,
@@ -19,11 +21,16 @@ __all__ = [
     "AgentConfig",
     "AgentEvent",
     "AgentRunResult",
+    "ApprovalHandler",
     "ChatMessage",
     "ChatSnapshot",
     "ChatSession",
     "FilePart",
     "ImagePart",
+    "MCPApprovalRequest",
+    "MCPApprovalRequiredError",
+    "MCPCallRecord",
+    "MCPServer",
     "TextPart",
     "ToolCallRequest",
     "ToolExecutionResult",

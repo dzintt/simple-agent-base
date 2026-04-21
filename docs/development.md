@@ -175,6 +175,12 @@ Use the live verification script when you want to test the real OpenAI path:
 uv run python scripts/live_e2e_test.py
 ```
 
+To run only the client-side MCP checks:
+
+```bash
+uv run python scripts/live_e2e_test.py --mcp-only
+```
+
 This script exercises:
 
 - plain text requests
@@ -195,6 +201,7 @@ Unlike the unit tests, the live script:
 - requires a real API key
 - talks to the configured provider
 - is slower and more environment-dependent
+- uses the repo's local demo MCP server for MCP coverage
 
 Use it when:
 
@@ -202,6 +209,13 @@ Use it when:
 - changing multimodal handling
 - changing sync wrappers
 - verifying behavior against a real model
+
+### Client-Side MCP Note
+
+The MCP checks use a local stdio server from `tests/fixtures/mcp_demo_server.py`.
+That means they only require normal function-tool support from the configured
+provider. OpenAI-compatible backends such as OpenRouter can run these checks as
+long as they support standard Responses API function calling.
 
 ## Running Examples
 

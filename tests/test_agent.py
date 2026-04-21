@@ -11,7 +11,11 @@ from pydantic import BaseModel
 
 from simple_agent_base import Agent, AgentConfig, ChatMessage, FilePart, ImagePart, TextPart, tool
 from simple_agent_base.errors import MaxTurnsExceededError, ProviderError, ToolExecutionError
-from simple_agent_base.providers.base import ConversationItem, ProviderCompletedEvent, ProviderResponse, ProviderTextDeltaEvent
+from simple_agent_base.providers.base import (
+    ConversationItem,
+    ProviderEvent,
+    ProviderResponse,
+)
 
 
 class FakeProvider:
@@ -43,7 +47,7 @@ class FakeProvider:
         input_items: Sequence[ConversationItem],
         tools: Sequence[dict[str, Any]],
         response_model: type[BaseModel] | None = None,
-    ) -> AsyncIterator[ProviderTextDeltaEvent | ProviderCompletedEvent]:
+    ) -> AsyncIterator[ProviderEvent]:
         raise NotImplementedError
 
     async def close(self) -> None:
