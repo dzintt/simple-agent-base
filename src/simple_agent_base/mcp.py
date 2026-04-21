@@ -186,12 +186,12 @@ class MCPClientBridge:
         if self._tools is None:
             tools: dict[str, MCPToolDefinition] = {}
             cursor: str | None = None
-            allowed = set(self.server.allowed_tools or [])
+            allowed = None if self.server.allowed_tools is None else set(self.server.allowed_tools)
 
             while True:
                 response = await self._session.list_tools(cursor=cursor)
                 for tool in response.tools:
-                    if allowed and tool.name not in allowed:
+                    if allowed is not None and tool.name not in allowed:
                         continue
                     definition = self._build_tool_definition(tool)
                     if definition.namespaced_name in tools:
@@ -238,25 +238,29 @@ class MCPClientBridge:
             return
 
         stack = AsyncExitStack()
-        if self.server.transport == "stdio":
-            params = StdioServerParameters(
-                command=self.server.command,
-                args=list(self.server.args),
-                env=dict(self.server.env) if self.server.env is not None else None,
-                cwd=self.server.cwd,
-            )
-            read_stream, write_stream = await stack.enter_async_context(stdio_client(params))
-        else:
-            http_client = await stack.enter_async_context(
-                httpx.AsyncClient(headers=dict(self.server.headers or {}))
-            )
-            read_stream, write_stream, _ = await stack.enter_async_context(
-                streamable_http_client(self.server.url, http_client=http_client)
-            )
+        try:
+            if self.server.transport == "stdio":
+                params = StdioServerParameters(
+                    command=self.server.command,
+                    args=list(self.server.args),
+                    env=dict(self.server.env) if self.server.env is not None else None,
+                    cwd=self.server.cwd,
+                )
+                read_stream, write_stream = await stack.enter_async_context(stdio_client(params))
+            else:
+                http_client = await stack.enter_async_context(
+                    httpx.AsyncClient(headers=dict(self.server.headers or {}))
+                )
+                read_stream, write_stream, _ = await stack.enter_async_context(
+                    streamable_http_client(self.server.url, http_client=http_client)
+                )
 
-        session = ClientSession(read_stream, write_stream)
-        await stack.enter_async_context(session)
-        await session.initialize()
+            session = ClientSession(read_stream, write_stream)
+            await stack.enter_async_context(session)
+            await session.initialize()
+        except Exception:
+            await stack.aclose()
+            raise
 
         self._stack = stack
         self._session = session
@@ -276,7 +280,11 @@ class MCPClientBridge:
 
 class MCPBridgeManager:
     def __init__(self, servers: list[MCPServer] | None = None) -> None:
-        self._bridges = {server.name: MCPClientBridge(server) for server in servers or []}
+        self._bridges: dict[str, MCPClientBridge] = {}
+        for server in servers or []:
+            if server.name in self._bridges:
+                raise ToolRegistrationError(f"MCP server '{server.name}' is already registered.")
+            self._bridges[server.name] = MCPClientBridge(server)
         self._tools_by_name: dict[str, tuple[MCPClientBridge, MCPToolDefinition]] = {}
         self._initialized = False
 

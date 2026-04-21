@@ -5,6 +5,7 @@ import subprocess
 import sys
 import time
 from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,7 @@ from simple_agent_base.providers.base import (
     ProviderEvent,
     ProviderResponse,
 )
+import simple_agent_base.mcp as mcp_module
 
 FIXTURE_SERVER = Path(__file__).parent / "fixtures" / "mcp_demo_server.py"
 
@@ -257,6 +259,86 @@ async def test_agent_filters_allowed_mcp_tools(stdio_server: MCPServer) -> None:
         await agent.aclose()
 
     assert [tool["name"] for tool in provider.calls[0]["tools"]] == ["demo__echo"]
+
+
+@pytest.mark.asyncio
+async def test_agent_with_empty_mcp_allowlist_exposes_no_tools(stdio_server: MCPServer) -> None:
+    provider = FakeProvider(
+        responses=[
+            ProviderResponse(
+                response_id="resp_1",
+                output_text="done",
+                output_items=[],
+                raw_response={"id": "resp_1"},
+            )
+        ]
+    )
+    agent = Agent(
+        config=AgentConfig(model="gpt-5"),
+        provider=provider,
+        mcp_servers=[stdio_server.model_copy(update={"allowed_tools": []})],
+    )
+
+    try:
+        await agent.run("List tools.")
+    finally:
+        await agent.aclose()
+
+    assert provider.calls[0]["tools"] == []
+
+
+def test_agent_rejects_duplicate_mcp_server_names(stdio_server: MCPServer) -> None:
+    duplicate = stdio_server.model_copy(update={"args": [str(FIXTURE_SERVER), "stdio", "--unused"]})
+
+    with pytest.raises(ToolRegistrationError, match="MCP server 'demo' is already registered"):
+        Agent(
+            config=AgentConfig(model="gpt-5"),
+            provider=FakeProvider(),
+            mcp_servers=[stdio_server, duplicate],
+        )
+
+
+@pytest.mark.asyncio
+async def test_failed_mcp_initialization_closes_opened_resources(monkeypatch: pytest.MonkeyPatch) -> None:
+    state = {"transport_closed": False, "session_closed": False}
+    server = MCPServer.stdio(
+        name="demo",
+        command=sys.executable,
+        args=[str(FIXTURE_SERVER), "stdio"],
+    )
+
+    @asynccontextmanager
+    async def fake_stdio_client(_params: Any) -> AsyncIterator[tuple[str, str]]:
+        try:
+            yield ("read-stream", "write-stream")
+        finally:
+            state["transport_closed"] = True
+
+    class FakeSession:
+        def __init__(self, read_stream: str, write_stream: str) -> None:
+            self.read_stream = read_stream
+            self.write_stream = write_stream
+
+        async def __aenter__(self) -> FakeSession:
+            return self
+
+        async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+            state["session_closed"] = True
+
+        async def initialize(self) -> None:
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(mcp_module, "stdio_client", fake_stdio_client)
+    monkeypatch.setattr(mcp_module, "ClientSession", FakeSession)
+
+    bridge = mcp_module.MCPClientBridge(server)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await bridge.list_tools()
+
+    assert state == {"transport_closed": True, "session_closed": True}
+    assert bridge._stack is None
+    assert bridge._session is None
 
 
 @pytest.mark.asyncio
