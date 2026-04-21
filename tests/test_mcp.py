@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import socket
 import subprocess
 import sys
@@ -7,6 +8,7 @@ import time
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -510,6 +512,150 @@ async def test_stream_emits_local_mcp_events(stdio_server: MCPServer) -> None:
     assert mcp_completed.output == "echo:hello"
 
 
+@pytest.mark.asyncio
+async def test_stream_yields_mcp_approval_request_before_waiting_for_handler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = FakeProvider(
+        stream_sequences=[
+            [
+                ProviderCompletedEvent(
+                    response=ProviderResponse(
+                        response_id="resp_1",
+                        tool_calls=[
+                            {
+                                "call_id": "call_1",
+                                "name": "demo__echo",
+                                "arguments": {"message": "hello"},
+                                "raw_arguments": '{"message":"hello"}',
+                            }
+                        ],
+                        output_items=[],
+                        raw_response={"id": "resp_1"},
+                    )
+                )
+            ],
+            [
+                ProviderCompletedEvent(
+                    response=ProviderResponse(
+                        response_id="resp_2",
+                        output_text="done",
+                        output_items=[],
+                        raw_response={"id": "resp_2"},
+                    )
+                )
+            ],
+        ]
+    )
+
+    async def approve(_request: Any) -> bool:
+        await asyncio.sleep(0.1)
+        return True
+
+    agent = Agent(
+        config=AgentConfig(model="gpt-5"),
+        provider=provider,
+        approval_handler=approve,
+    )
+    fake_tool = SimpleNamespace(server_name="demo", tool_name="echo", require_approval=True)
+
+    async def fake_ready() -> None:
+        return None
+
+    async def fake_call_tool(*, namespaced_name: str, arguments: dict[str, Any]) -> tuple[Any, Any]:
+        return (
+            fake_tool,
+            mcp_types.CallToolResult(
+                content=[mcp_types.TextContent(type="text", text="echo:hello")],
+                isError=False,
+            ),
+        )
+
+    monkeypatch.setattr(agent, "_ensure_mcp_ready", fake_ready)
+    monkeypatch.setattr(agent._mcp_manager, "has_tool", lambda name: name == "demo__echo")
+    monkeypatch.setattr(agent._mcp_manager, "get_tool", lambda name: fake_tool)
+    monkeypatch.setattr(agent._mcp_manager, "call_tool", fake_call_tool)
+
+    stream = agent.stream("Use the MCP tool.")
+    try:
+        first = await asyncio.wait_for(anext(stream), timeout=0.05)
+        second = await asyncio.wait_for(anext(stream), timeout=0.05)
+        remaining = [event async for event in stream]
+    finally:
+        await agent.aclose()
+
+    assert first.type == "tool_call_started"
+    assert second.type == "mcp_approval_requested"
+    assert [event.type for event in remaining] == [
+        "mcp_call_started",
+        "mcp_call_completed",
+        "tool_call_completed",
+        "completed",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stream_does_not_emit_mcp_started_when_approval_is_denied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = FakeProvider(
+        stream_sequences=[
+            [
+                ProviderCompletedEvent(
+                    response=ProviderResponse(
+                        response_id="resp_1",
+                        tool_calls=[
+                            {
+                                "call_id": "call_1",
+                                "name": "demo__echo",
+                                "arguments": {"message": "hello"},
+                                "raw_arguments": '{"message":"hello"}',
+                            }
+                        ],
+                        output_items=[],
+                        raw_response={"id": "resp_1"},
+                    )
+                )
+            ],
+            [
+                ProviderCompletedEvent(
+                    response=ProviderResponse(
+                        response_id="resp_2",
+                        output_text="handled",
+                        output_items=[],
+                        raw_response={"id": "resp_2"},
+                    )
+                )
+            ],
+        ]
+    )
+    agent = Agent(
+        config=AgentConfig(model="gpt-5"),
+        provider=provider,
+        approval_handler=lambda _request: False,
+    )
+    fake_tool = SimpleNamespace(server_name="demo", tool_name="echo", require_approval=True)
+
+    async def fake_ready() -> None:
+        return None
+
+    monkeypatch.setattr(agent, "_ensure_mcp_ready", fake_ready)
+    monkeypatch.setattr(agent._mcp_manager, "has_tool", lambda name: name == "demo__echo")
+    monkeypatch.setattr(agent._mcp_manager, "get_tool", lambda name: fake_tool)
+
+    try:
+        events = [event async for event in agent.stream("Use the MCP tool.")]
+    finally:
+        await agent.aclose()
+
+    assert [event.type for event in events] == [
+        "tool_call_started",
+        "mcp_approval_requested",
+        "tool_call_completed",
+        "completed",
+    ]
+
+
 @tool(name="demo__echo")
 async def conflicting_local_tool(message: str) -> str:
     """Conflicts with the MCP echo tool."""
@@ -581,6 +727,51 @@ async def test_agent_executes_streamable_http_mcp_tool(http_server: str) -> None
     assert result.tool_results[0].output == "5"
     assert result.mcp_calls[0].server_name == "demohttp"
     assert result.mcp_calls[0].name == "add"
+
+
+@pytest.mark.asyncio
+async def test_agent_wraps_mcp_transport_errors_as_tool_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = FakeProvider(
+        responses=[
+            ProviderResponse(
+                response_id="resp_1",
+                tool_calls=[
+                    {
+                        "call_id": "call_1",
+                        "name": "demo__echo",
+                        "arguments": {"message": "hello"},
+                        "raw_arguments": '{"message":"hello"}',
+                    }
+                ],
+                output_items=[],
+                raw_response={"id": "resp_1"},
+            )
+        ]
+    )
+    agent = Agent(
+        config=AgentConfig(model="gpt-5"),
+        provider=provider,
+    )
+    fake_tool = SimpleNamespace(server_name="demo", tool_name="echo", require_approval=False)
+
+    async def fake_ready() -> None:
+        return None
+
+    async def broken_call_tool(*, namespaced_name: str, arguments: dict[str, Any]) -> Any:
+        raise RuntimeError("transport dropped")
+
+    monkeypatch.setattr(agent, "_ensure_mcp_ready", fake_ready)
+    monkeypatch.setattr(agent._mcp_manager, "has_tool", lambda name: name == "demo__echo")
+    monkeypatch.setattr(agent._mcp_manager, "get_tool", lambda name: fake_tool)
+    monkeypatch.setattr(agent._mcp_manager, "call_tool", broken_call_tool)
+
+    try:
+        with pytest.raises(ToolExecutionError, match="transport dropped"):
+            await agent.run("Use the MCP tool.")
+    finally:
+        await agent.aclose()
 
 
 def _free_port() -> int:

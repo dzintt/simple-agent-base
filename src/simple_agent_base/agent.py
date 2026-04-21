@@ -49,6 +49,13 @@ from simple_agent_base.types import (
 class _ExecutedCall:
     tool_result: ToolExecutionResult
     mcp_call: MCPCallRecord | None = None
+    emit_mcp_events: bool = True
+
+
+@dataclass(slots=True)
+class _PreparedToolCall:
+    events: list[AgentEvent]
+    mcp_tool: Any | None = None
 
 
 class Agent:
@@ -263,7 +270,7 @@ class Agent:
                 for call in final_response.tool_calls:
                     yield AgentEvent(type="tool_call_started", tool_call=call)
 
-                for event in await self._execute_tool_batch_stream(
+                async for event in self._execute_tool_batch_stream(
                     final_response.tool_calls,
                     tool_results=tool_results,
                     mcp_calls=mcp_calls,
@@ -285,9 +292,14 @@ class Agent:
             duplicate_list = ", ".join(duplicate_names)
             raise ToolRegistrationError(f"MCP tool names conflict with local tools: {duplicate_list}")
 
-    async def _execute_tool(self, call: ToolCallRequest) -> _ExecutedCall:
+    async def _execute_tool(
+        self,
+        call: ToolCallRequest,
+        *,
+        skip_mcp_approval: bool = False,
+    ) -> _ExecutedCall:
         if self._mcp_manager.has_tool(call.name):
-            return await self._execute_mcp_tool(call)
+            return await self._execute_mcp_tool(call, skip_approval=skip_mcp_approval)
         return _ExecutedCall(tool_result=await self.registry.execute(call))
 
     async def _execute_tool_batch(
@@ -309,44 +321,93 @@ class Agent:
         tool_results: list[ToolExecutionResult],
         mcp_calls: list[MCPCallRecord],
         transcript: list[ConversationItem],
-    ) -> list[AgentEvent]:
-        events: list[AgentEvent] = []
+    ) -> AsyncIterator[AgentEvent]:
         if self.config.parallel_tool_calls:
+            pending: list[asyncio.Task[_ExecutedCall]] = []
             for call in calls:
-                self._append_mcp_stream_prelude(call, events)
-            executed_calls = await self._execute_tool_batch(calls)
+                prepared = self._prepare_tool_call_for_stream(call)
+                for event in prepared.events:
+                    yield event
+                skip_mcp_approval = False
+                if prepared.mcp_tool is not None:
+                    approved = await self._approve_mcp_call(
+                        self._build_mcp_approval_request(prepared.mcp_tool, call)
+                    )
+                    if not approved:
+                        for event in self._append_executed_call_events(
+                            self._build_denied_mcp_call(prepared.mcp_tool, call),
+                            tool_results=tool_results,
+                            mcp_calls=mcp_calls,
+                            transcript=transcript,
+                        ):
+                            yield event
+                        continue
+                    yield self._build_mcp_started_event(call)
+                    skip_mcp_approval = True
+                pending.append(
+                    asyncio.create_task(
+                        self._execute_tool(call, skip_mcp_approval=skip_mcp_approval)
+                    )
+                )
+
+            if not pending:
+                return
+
+            executed_calls = await asyncio.gather(*pending)
             for executed in executed_calls:
-                self._append_executed_call_events(
+                for event in self._append_executed_call_events(
                     executed,
-                    events=events,
                     tool_results=tool_results,
                     mcp_calls=mcp_calls,
                     transcript=transcript,
-                )
-            return events
+                ):
+                    yield event
+            return
 
         for call in calls:
-            self._append_mcp_stream_prelude(call, events)
-            executed = await self._execute_tool(call)
-            self._append_executed_call_events(
+            prepared = self._prepare_tool_call_for_stream(call)
+            for event in prepared.events:
+                yield event
+            skip_mcp_approval = False
+            if prepared.mcp_tool is not None:
+                approved = await self._approve_mcp_call(
+                    self._build_mcp_approval_request(prepared.mcp_tool, call)
+                )
+                if not approved:
+                    for event in self._append_executed_call_events(
+                        self._build_denied_mcp_call(prepared.mcp_tool, call),
+                        tool_results=tool_results,
+                        mcp_calls=mcp_calls,
+                        transcript=transcript,
+                    ):
+                        yield event
+                    continue
+                yield self._build_mcp_started_event(call)
+                skip_mcp_approval = True
+            executed = await self._execute_tool(call, skip_mcp_approval=skip_mcp_approval)
+            for event in self._append_executed_call_events(
                 executed,
-                events=events,
                 tool_results=tool_results,
                 mcp_calls=mcp_calls,
                 transcript=transcript,
-            )
-        return events
+            ):
+                yield event
 
     def _build_tool_params(self) -> list[dict[str, Any]]:
         tools = list(self.registry.to_openai_tools())
         tools.extend(self._mcp_manager.to_openai_tools())
         return tools
 
-    async def _execute_mcp_tool(self, call: ToolCallRequest) -> _ExecutedCall:
+    async def _execute_mcp_tool(
+        self,
+        call: ToolCallRequest,
+        *,
+        skip_approval: bool = False,
+    ) -> _ExecutedCall:
         tool = self._mcp_manager.get_tool(call.name)
         approved = True
 
-        if tool.require_approval:
+        if tool.require_approval and not skip_approval:
             approved = await self._approve_mcp_call(self._build_mcp_approval_request(tool, call))
 
         if not approved:
@@ -365,13 +426,18 @@ class Agent:
                     arguments=call.arguments,
                     error=message,
                 ),
+                emit_mcp_events=False,
             )
 
-        tool, raw_result = await self._mcp_manager.call_tool(
-            namespaced_name=call.name,
-            arguments=call.arguments,
-        )
-        output = normalize_mcp_tool_result(raw_result)
+        try:
+            tool, raw_result = await self._mcp_manager.call_tool(
+                namespaced_name=call.name,
+                arguments=call.arguments,
+            )
+            output = normalize_mcp_tool_result(raw_result)
+        except Exception as exc:
+            raise ToolExecutionError(f"MCP tool '{tool.tool_name}' failed: {exc}") from exc
+
         if raw_result.isError:
             raise ToolExecutionError(f"MCP tool '{tool.tool_name}' failed: {output}")
 
@@ -392,35 +458,61 @@ class Agent:
             ),
         )
 
-    def _append_mcp_stream_prelude(
+    def _prepare_tool_call_for_stream(
         self,
         call: ToolCallRequest,
-        events: list[AgentEvent],
-    ) -> None:
+    ) -> _PreparedToolCall:
         if not self._mcp_manager.has_tool(call.name):
-            return
+            return _PreparedToolCall(events=[])
 
-        approval_event = self._build_mcp_approval_event(call)
-        if approval_event is not None:
-            events.append(approval_event)
+        tool = self._mcp_manager.get_tool(call.name)
+        events: list[AgentEvent] = []
+        if tool.require_approval:
+            approval_event = self._build_mcp_approval_event(call)
+            if approval_event is not None:
+                events.append(approval_event)
+            return _PreparedToolCall(events=events, mcp_tool=tool)
+
         events.append(self._build_mcp_started_event(call))
+        return _PreparedToolCall(events=events)
+
+    def _build_denied_mcp_call(self, tool: Any, call: ToolCallRequest) -> _ExecutedCall:
+        message = "MCP tool call denied by approval handler."
+        return _ExecutedCall(
+            tool_result=ToolExecutionResult(
+                call_id=call.call_id,
+                name=call.name,
+                arguments=call.arguments,
+                output=message,
+            ),
+            mcp_call=MCPCallRecord(
+                id=call.call_id,
+                server_name=tool.server_name,
+                name=tool.tool_name,
+                arguments=call.arguments,
+                error=message,
+            ),
+            emit_mcp_events=False,
+        )
 
     def _append_executed_call_events(
         self,
         executed: _ExecutedCall,
         *,
-        events: list[AgentEvent],
         tool_results: list[ToolExecutionResult],
         mcp_calls: list[MCPCallRecord],
         transcript: list[ConversationItem],
-    ) -> None:
+    ) -> list[AgentEvent]:
+        events: list[AgentEvent] = []
         if executed.mcp_call is not None:
             mcp_calls.append(executed.mcp_call)
-            events.append(AgentEvent(type="mcp_call_completed", mcp_call=executed.mcp_call))
+            if executed.emit_mcp_events:
+                events.append(AgentEvent(type="mcp_call_completed", mcp_call=executed.mcp_call))
 
         tool_results.append(executed.tool_result)
         transcript.append(self._tool_output_item(executed.tool_result))
         events.append(AgentEvent(type="tool_call_completed", tool_result=executed.tool_result))
+        return events
 
     def _build_mcp_approval_request(self, tool: Any, call: ToolCallRequest) -> MCPApprovalRequest:
         return build_mcp_approval_request(
