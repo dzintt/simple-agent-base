@@ -5,7 +5,6 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from simple_agent_base.mcp import MCPApprovalRequest, MCPCallRecord
 from simple_agent_base.types import ToolCallRequest
 
 ConversationItem = dict[str, Any]
@@ -35,35 +34,7 @@ class ProviderCompletedEvent(BaseModel):
     type: Literal["completed"] = "completed"
     response: ProviderResponse
 
-
-class ProviderMCPCallStartedEvent(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    type: Literal["mcp_call_started"] = "mcp_call_started"
-    mcp_call: MCPCallRecord
-
-
-class ProviderMCPCallCompletedEvent(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    type: Literal["mcp_call_completed"] = "mcp_call_completed"
-    mcp_call: MCPCallRecord
-
-
-class ProviderMCPApprovalRequestedEvent(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    type: Literal["mcp_approval_requested"] = "mcp_approval_requested"
-    mcp_approval: MCPApprovalRequest
-
-
-ProviderEvent = (
-    ProviderTextDeltaEvent
-    | ProviderCompletedEvent
-    | ProviderMCPCallStartedEvent
-    | ProviderMCPCallCompletedEvent
-    | ProviderMCPApprovalRequestedEvent
-)
+ProviderEvent = ProviderTextDeltaEvent | ProviderCompletedEvent
 
 
 class Provider(Protocol):

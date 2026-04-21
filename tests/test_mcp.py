@@ -1,28 +1,29 @@
 from __future__ import annotations
 
+import socket
+import subprocess
+import sys
+import time
 from collections.abc import AsyncIterator, Sequence
+from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
+from mcp import types as mcp_types
 from pydantic import BaseModel, ValidationError
 
-from simple_agent_base import (
-    Agent,
-    AgentConfig,
-    MCPApprovalRequest,
-    MCPApprovalRequiredError,
-    MCPServer,
-)
+from simple_agent_base import Agent, AgentConfig, MCPServer, tool
+from simple_agent_base.errors import MCPApprovalRequiredError, ToolExecutionError, ToolRegistrationError
+from simple_agent_base.mcp import normalize_mcp_tool_result
 from simple_agent_base.providers.base import (
     ConversationItem,
     ProviderCompletedEvent,
     ProviderEvent,
-    ProviderMCPApprovalRequestedEvent,
-    ProviderMCPCallCompletedEvent,
-    ProviderMCPCallStartedEvent,
     ProviderResponse,
-    ProviderTextDeltaEvent,
 )
+
+FIXTURE_SERVER = Path(__file__).parent / "fixtures" / "mcp_demo_server.py"
 
 
 class FakeProvider:
@@ -73,86 +74,168 @@ class FakeProvider:
         return None
 
 
-# ---------------------------------------------------------------------------
-# MCPServer.to_tool_param shape
-# ---------------------------------------------------------------------------
-
-
-def test_mcp_server_to_tool_param_minimal() -> None:
-    server = MCPServer(server_label="deepwiki", server_url="https://mcp.deepwiki.com/mcp")
-
-    assert server.to_tool_param() == {
-        "type": "mcp",
-        "server_label": "deepwiki",
-        "server_url": "https://mcp.deepwiki.com/mcp",
-    }
-
-
-def test_mcp_server_to_tool_param_maps_boolean_require_approval() -> None:
-    trusted_server = MCPServer(
-        server_label="deepwiki",
-        server_url="https://mcp.deepwiki.com/mcp",
-        require_approval=False,
+@pytest.fixture
+def stdio_server() -> MCPServer:
+    return MCPServer.stdio(
+        name="demo",
+        command=sys.executable,
+        args=[str(FIXTURE_SERVER), "stdio"],
     )
-    gated_server = MCPServer(
-        server_label="gh",
-        server_url="https://gitmcp.io/owner/repo",
+
+
+@pytest.fixture
+def http_server() -> str:
+    port = _free_port()
+    process = subprocess.Popen(
+        [sys.executable, str(FIXTURE_SERVER), "http", str(port)],
+        cwd=str(FIXTURE_SERVER.parent.parent.parent),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    url = f"http://127.0.0.1:{port}/mcp"
+    try:
+        _wait_for_http_server(url)
+        yield url
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+
+
+def test_mcp_server_stdio_constructor() -> None:
+    server = MCPServer.stdio(
+        name="demo",
+        command="python",
+        args=["server.py"],
+        env={"TOKEN": "abc"},
+        cwd="C:/tmp",
+        allowed_tools=["echo"],
         require_approval=True,
     )
 
-    assert trusted_server.to_tool_param()["require_approval"] == "never"
-    assert gated_server.to_tool_param()["require_approval"] == "always"
+    assert server.transport == "stdio"
+    assert server.command == "python"
+    assert server.args == ["server.py"]
+    assert server.env == {"TOKEN": "abc"}
+    assert server.cwd == "C:/tmp"
+    assert server.allowed_tools == ["echo"]
+    assert server.require_approval is True
 
 
-def test_mcp_server_to_tool_param_full() -> None:
-    server = MCPServer(
-        server_label="gh",
-        server_url="https://gitmcp.io/owner/repo",
-        authorization="Bearer abc",
-        headers={"X-Extra": "1"},
-        allowed_tools=["list_files", "read_file"],
-        require_approval={"always": {"tool_names": ["delete_file"]}},
-        server_description="GitHub MCP",
+def test_mcp_server_http_constructor() -> None:
+    server = MCPServer.http(
+        name="demo-http",
+        url="https://example.com/mcp",
+        headers={"Authorization": "Bearer 123"},
+        allowed_tools=["echo"],
     )
 
-    payload = server.to_tool_param()
-    assert payload["type"] == "mcp"
-    assert payload["server_label"] == "gh"
-    assert payload["server_url"] == "https://gitmcp.io/owner/repo"
-    assert payload["authorization"] == "Bearer abc"
-    assert payload["headers"] == {"X-Extra": "1"}
-    assert payload["allowed_tools"] == ["list_files", "read_file"]
-    assert payload["require_approval"] == {"always": {"tool_names": ["delete_file"]}}
-    assert payload["server_description"] == "GitHub MCP"
+    assert server.transport == "streamable_http"
+    assert server.url == "https://example.com/mcp"
+    assert server.headers == {"Authorization": "Bearer 123"}
+    assert server.allowed_tools == ["echo"]
+    assert server.require_approval is False
 
 
-def test_mcp_server_requires_exactly_one_source() -> None:
+def test_mcp_server_rejects_invalid_transport_fields() -> None:
     with pytest.raises(ValidationError):
-        MCPServer(server_label="oops")
+        MCPServer(name="bad", transport="stdio")
+
     with pytest.raises(ValidationError):
         MCPServer(
-            server_label="oops",
-            server_url="https://x",
-            connector_id="connector_gmail",
+            name="bad-http",
+            transport="streamable_http",
+            url="https://example.com/mcp",
+            command="python",
         )
 
 
-def test_mcp_server_accepts_connector_id() -> None:
-    server = MCPServer(server_label="gmail", connector_id="connector_gmail")
-    payload = server.to_tool_param()
-    assert payload["connector_id"] == "connector_gmail"
-    assert "server_url" not in payload
+def test_normalize_mcp_tool_result_prefers_text_blocks() -> None:
+    result = mcp_types.CallToolResult(
+        content=[
+            mcp_types.TextContent(type="text", text="one"),
+            mcp_types.TextContent(type="text", text="two"),
+        ],
+        isError=False,
+    )
+
+    assert normalize_mcp_tool_result(result) == "one\ntwo"
 
 
-# ---------------------------------------------------------------------------
-# Agent wiring
-# ---------------------------------------------------------------------------
+def test_normalize_mcp_tool_result_uses_structured_content() -> None:
+    result = mcp_types.CallToolResult(
+        content=[],
+        structuredContent={"name": "Ada"},
+        isError=False,
+    )
+
+    assert normalize_mcp_tool_result(result) == '{"name": "Ada"}'
+
+
+def test_normalize_mcp_tool_result_falls_back_to_full_payload() -> None:
+    result = mcp_types.CallToolResult(content=[], isError=False)
+
+    output = normalize_mcp_tool_result(result)
+
+    assert '"isError": false' in output
 
 
 @pytest.mark.asyncio
-async def test_agent_forwards_mcp_tool_in_tools_kwarg() -> None:
+async def test_agent_discovers_and_executes_stdio_mcp_tool(stdio_server: MCPServer) -> None:
     provider = FakeProvider(
-        [
+        responses=[
+            ProviderResponse(
+                response_id="resp_1",
+                tool_calls=[
+                    {
+                        "call_id": "call_1",
+                        "name": "demo__echo",
+                        "arguments": {"message": "hello"},
+                        "raw_arguments": '{"message":"hello"}',
+                    }
+                ],
+                output_items=[],
+                raw_response={"id": "resp_1"},
+            ),
+            ProviderResponse(
+                response_id="resp_2",
+                output_text="done",
+                output_items=[],
+                raw_response={"id": "resp_2"},
+            ),
+        ]
+    )
+    agent = Agent(
+        config=AgentConfig(model="gpt-5"),
+        provider=provider,
+        mcp_servers=[stdio_server],
+    )
+
+    try:
+        result = await agent.run("Use the MCP tool.")
+    finally:
+        await agent.aclose()
+
+    assert [tool["name"] for tool in provider.calls[0]["tools"]] == [
+        "demo__echo",
+        "demo__add",
+        "demo__structured_value",
+        "demo__fail",
+    ]
+    assert result.output_text == "done"
+    assert result.tool_results[0].output == "echo:hello"
+    assert result.mcp_calls[0].server_name == "demo"
+    assert result.mcp_calls[0].name == "echo"
+    assert result.mcp_calls[0].output == "echo:hello"
+
+
+@pytest.mark.asyncio
+async def test_agent_filters_allowed_mcp_tools(stdio_server: MCPServer) -> None:
+    provider = FakeProvider(
+        responses=[
             ProviderResponse(
                 response_id="resp_1",
                 output_text="done",
@@ -165,189 +248,75 @@ async def test_agent_forwards_mcp_tool_in_tools_kwarg() -> None:
         config=AgentConfig(model="gpt-5"),
         provider=provider,
         mcp_servers=[
-            MCPServer(server_label="deepwiki", server_url="https://mcp.deepwiki.com/mcp")
+            stdio_server.model_copy(update={"allowed_tools": ["echo"]})
         ],
     )
 
-    await agent.run("Hi.")
+    try:
+        await agent.run("List tools.")
+    finally:
+        await agent.aclose()
 
-    tools = provider.calls[0]["tools"]
-    assert len(tools) == 1
-    assert tools[0]["type"] == "mcp"
-    assert tools[0]["server_label"] == "deepwiki"
-
-
-@pytest.mark.asyncio
-async def test_agent_collects_mcp_calls_from_output_items() -> None:
-    provider = FakeProvider(
-        [
-            ProviderResponse(
-                response_id="resp_1",
-                output_text="All done.",
-                output_items=[
-                    {
-                        "type": "mcp_list_tools",
-                        "server_label": "deepwiki",
-                        "tools": [],
-                    },
-                    {
-                        "type": "mcp_call",
-                        "id": "mcp_1",
-                        "server_label": "deepwiki",
-                        "name": "ask_question",
-                        "arguments": '{"q":"what"}',
-                        "output": "answer",
-                    },
-                ],
-                raw_response={"id": "resp_1"},
-            )
-        ]
-    )
-    agent = Agent(
-        config=AgentConfig(model="gpt-5"),
-        provider=provider,
-        mcp_servers=[MCPServer(server_label="deepwiki", server_url="https://x")],
-    )
-
-    result = await agent.run("Hi.")
-
-    assert [c.name for c in result.mcp_calls] == ["ask_question"]
-    assert result.mcp_calls[0].arguments == {"q": "what"}
-    assert result.mcp_calls[0].output == "answer"
-
-
-# ---------------------------------------------------------------------------
-# Approval loop
-# ---------------------------------------------------------------------------
+    assert [tool["name"] for tool in provider.calls[0]["tools"]] == ["demo__echo"]
 
 
 @pytest.mark.asyncio
-async def test_approval_handler_is_called_and_response_item_appended() -> None:
+async def test_agent_approval_handler_can_deny_mcp_call(stdio_server: MCPServer) -> None:
     provider = FakeProvider(
-        [
+        responses=[
             ProviderResponse(
                 response_id="resp_1",
-                output_text="",
-                output_items=[
+                tool_calls=[
                     {
-                        "type": "mcp_approval_request",
-                        "id": "appr_1",
-                        "server_label": "deepwiki",
-                        "name": "ask_question",
-                        "arguments": '{"q":"what"}',
+                        "call_id": "call_1",
+                        "name": "demo__echo",
+                        "arguments": {"message": "hello"},
+                        "raw_arguments": '{"message":"hello"}',
                     }
                 ],
+                output_items=[],
                 raw_response={"id": "resp_1"},
             ),
             ProviderResponse(
                 response_id="resp_2",
-                output_text="All good.",
+                output_text="handled",
                 output_items=[],
                 raw_response={"id": "resp_2"},
             ),
         ]
     )
-
-    seen: list[MCPApprovalRequest] = []
-
-    def handler(req: MCPApprovalRequest) -> bool:
-        seen.append(req)
-        return True
-
     agent = Agent(
         config=AgentConfig(model="gpt-5"),
         provider=provider,
-        mcp_servers=[
-            MCPServer(
-                server_label="deepwiki",
-                server_url="https://x",
-                require_approval=True,
-            )
-        ],
-        approval_handler=handler,
+        mcp_servers=[stdio_server.model_copy(update={"require_approval": True})],
+        approval_handler=lambda request: False,
     )
 
-    result = await agent.run("Hi.")
+    try:
+        result = await agent.run("Use the MCP tool.")
+    finally:
+        await agent.aclose()
 
-    assert result.output_text == "All good."
-    assert len(seen) == 1
-    assert seen[0].id == "appr_1"
-    assert seen[0].name == "ask_question"
-    assert seen[0].arguments == {"q": "what"}
-
-    second_turn_items = provider.calls[1]["input_items"]
-    assert second_turn_items[-1] == {
-        "type": "mcp_approval_response",
-        "approval_request_id": "appr_1",
-        "approve": True,
-    }
+    assert result.output_text == "handled"
+    assert result.tool_results[0].output == "MCP tool call denied by approval handler."
+    assert result.mcp_calls[0].error == "MCP tool call denied by approval handler."
 
 
 @pytest.mark.asyncio
-async def test_async_approval_handler_is_awaited() -> None:
+async def test_agent_requires_approval_handler_for_gated_mcp_call(stdio_server: MCPServer) -> None:
     provider = FakeProvider(
-        [
+        responses=[
             ProviderResponse(
                 response_id="resp_1",
-                output_items=[
+                tool_calls=[
                     {
-                        "type": "mcp_approval_request",
-                        "id": "appr_1",
-                        "server_label": "deepwiki",
-                        "name": "ask_question",
-                        "arguments": "{}",
+                        "call_id": "call_1",
+                        "name": "demo__echo",
+                        "arguments": {"message": "hello"},
+                        "raw_arguments": '{"message":"hello"}',
                     }
                 ],
-                raw_response={"id": "resp_1"},
-            ),
-            ProviderResponse(
-                response_id="resp_2",
-                output_text="Denied handled.",
                 output_items=[],
-                raw_response={"id": "resp_2"},
-            ),
-        ]
-    )
-
-    async def handler(req: MCPApprovalRequest) -> bool:
-        return False
-
-    agent = Agent(
-        config=AgentConfig(model="gpt-5"),
-        provider=provider,
-        mcp_servers=[
-            MCPServer(
-                server_label="deepwiki",
-                server_url="https://x",
-                require_approval=True,
-            )
-        ],
-        approval_handler=handler,
-    )
-
-    await agent.run("Hi.")
-    assert provider.calls[1]["input_items"][-1] == {
-        "type": "mcp_approval_response",
-        "approval_request_id": "appr_1",
-        "approve": False,
-    }
-
-
-@pytest.mark.asyncio
-async def test_missing_approval_handler_raises() -> None:
-    provider = FakeProvider(
-        [
-            ProviderResponse(
-                response_id="resp_1",
-                output_items=[
-                    {
-                        "type": "mcp_approval_request",
-                        "id": "appr_1",
-                        "server_label": "deepwiki",
-                        "name": "ask_question",
-                        "arguments": "{}",
-                    }
-                ],
                 raw_response={"id": "resp_1"},
             )
         ]
@@ -355,119 +324,65 @@ async def test_missing_approval_handler_raises() -> None:
     agent = Agent(
         config=AgentConfig(model="gpt-5"),
         provider=provider,
-        mcp_servers=[
-            MCPServer(
-                server_label="deepwiki",
-                server_url="https://x",
-                require_approval=True,
-            )
-        ],
+        mcp_servers=[stdio_server.model_copy(update={"require_approval": True})],
     )
 
-    with pytest.raises(MCPApprovalRequiredError):
-        await agent.run("Hi.")
-
-
-# ---------------------------------------------------------------------------
-# Streaming events
-# ---------------------------------------------------------------------------
+    try:
+        with pytest.raises(MCPApprovalRequiredError):
+            await agent.run("Use the MCP tool.")
+    finally:
+        await agent.aclose()
 
 
 @pytest.mark.asyncio
-async def test_stream_emits_mcp_call_events() -> None:
+async def test_agent_surfaces_mcp_error_results_as_tool_failures(stdio_server: MCPServer) -> None:
+    provider = FakeProvider(
+        responses=[
+            ProviderResponse(
+                response_id="resp_1",
+                tool_calls=[
+                    {
+                        "call_id": "call_1",
+                        "name": "demo__fail",
+                        "arguments": {"message": "boom"},
+                        "raw_arguments": '{"message":"boom"}',
+                    }
+                ],
+                output_items=[],
+                raw_response={"id": "resp_1"},
+            )
+        ]
+    )
+    agent = Agent(
+        config=AgentConfig(model="gpt-5"),
+        provider=provider,
+        mcp_servers=[stdio_server],
+    )
+
+    try:
+        with pytest.raises(ToolExecutionError, match="boom"):
+            await agent.run("Use the failing MCP tool.")
+    finally:
+        await agent.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_emits_local_mcp_events(stdio_server: MCPServer) -> None:
     provider = FakeProvider(
         stream_sequences=[
             [
-                ProviderMCPCallStartedEvent(
-                    mcp_call={
-                        "id": "mcp_1",
-                        "server_label": "deepwiki",
-                        "name": "ask_question",
-                        "arguments": {},
-                    }
-                ),
-                ProviderMCPCallCompletedEvent(
-                    mcp_call={
-                        "id": "mcp_1",
-                        "server_label": "deepwiki",
-                        "name": "ask_question",
-                        "arguments": {},
-                        "output": "answer",
-                    }
-                ),
                 ProviderCompletedEvent(
                     response=ProviderResponse(
                         response_id="resp_1",
-                        output_text="",
-                        output_items=[
+                        tool_calls=[
                             {
-                                "type": "mcp_call",
-                                "id": "mcp_1",
-                                "server_label": "deepwiki",
-                                "name": "ask_question",
-                                "arguments": "{}",
-                                "output": "answer",
+                                "call_id": "call_1",
+                                "name": "demo__echo",
+                                "arguments": {"message": "hello"},
+                                "raw_arguments": '{"message":"hello"}',
                             }
                         ],
-                        raw_response={"id": "resp_1"},
-                    )
-                )
-            ],
-            [
-                ProviderTextDeltaEvent(delta="Done"),
-                ProviderCompletedEvent(
-                    response=ProviderResponse(
-                        response_id="resp_2",
-                        output_text="Done",
                         output_items=[],
-                        raw_response={"id": "resp_2"},
-                    )
-                ),
-            ],
-        ]
-    )
-    agent = Agent(
-        config=AgentConfig(model="gpt-5"),
-        provider=provider,
-        mcp_servers=[MCPServer(server_label="deepwiki", server_url="https://x")],
-    )
-
-    events = [event async for event in agent.stream("Hi.")]
-
-    types = [e.type for e in events]
-    assert "mcp_call_started" in types
-    assert "mcp_call_completed" in types
-    assert types[-1] == "completed"
-    completed = events[-1]
-    assert completed.result is not None
-    assert [c.name for c in completed.result.mcp_calls] == ["ask_question"]
-
-
-@pytest.mark.asyncio
-async def test_stream_emits_mcp_approval_requested_event() -> None:
-    provider = FakeProvider(
-        stream_sequences=[
-            [
-                ProviderMCPApprovalRequestedEvent(
-                    mcp_approval={
-                        "id": "appr_1",
-                        "server_label": "deepwiki",
-                        "name": "ask_question",
-                        "arguments": {},
-                    }
-                ),
-                ProviderCompletedEvent(
-                    response=ProviderResponse(
-                        response_id="resp_1",
-                        output_items=[
-                            {
-                                "type": "mcp_approval_request",
-                                "id": "appr_1",
-                                "server_label": "deepwiki",
-                                "name": "ask_question",
-                                "arguments": "{}",
-                            }
-                        ],
                         raw_response={"id": "resp_1"},
                     )
                 )
@@ -476,7 +391,7 @@ async def test_stream_emits_mcp_approval_requested_event() -> None:
                 ProviderCompletedEvent(
                     response=ProviderResponse(
                         response_id="resp_2",
-                        output_text="Done",
+                        output_text="done",
                         output_items=[],
                         raw_response={"id": "resp_2"},
                     )
@@ -484,24 +399,125 @@ async def test_stream_emits_mcp_approval_requested_event() -> None:
             ],
         ]
     )
-
     agent = Agent(
         config=AgentConfig(model="gpt-5"),
         provider=provider,
-        mcp_servers=[
-            MCPServer(
-                server_label="deepwiki",
-                server_url="https://x",
-                require_approval=True,
-            )
-        ],
-        approval_handler=lambda req: True,
+        mcp_servers=[stdio_server.model_copy(update={"require_approval": True})],
+        approval_handler=lambda request: True,
     )
 
-    events = [event async for event in agent.stream("Hi.")]
+    try:
+        events = [event async for event in agent.stream("Use the MCP tool.")]
+    finally:
+        await agent.aclose()
 
-    types = [e.type for e in events]
-    assert "mcp_approval_requested" in types
-    approval_event = next(e for e in events if e.type == "mcp_approval_requested")
-    assert approval_event.mcp_approval is not None
-    assert approval_event.mcp_approval.id == "appr_1"
+    assert [event.type for event in events] == [
+        "tool_call_started",
+        "mcp_approval_requested",
+        "mcp_call_started",
+        "mcp_call_completed",
+        "tool_call_completed",
+        "completed",
+    ]
+    approval = events[1].mcp_approval
+    assert approval is not None
+    assert approval.server_name == "demo"
+    assert approval.name == "echo"
+    mcp_completed = events[3].mcp_call
+    assert mcp_completed is not None
+    assert mcp_completed.server_name == "demo"
+    assert mcp_completed.output == "echo:hello"
+
+
+@tool(name="demo__echo")
+async def conflicting_local_tool(message: str) -> str:
+    """Conflicts with the MCP echo tool."""
+    return message
+
+
+@pytest.mark.asyncio
+async def test_agent_rejects_conflicting_local_and_mcp_tool_names(stdio_server: MCPServer) -> None:
+    provider = FakeProvider(
+        responses=[
+            ProviderResponse(
+                response_id="resp_1",
+                output_text="done",
+                output_items=[],
+                raw_response={"id": "resp_1"},
+            )
+        ]
+    )
+    agent = Agent(
+        config=AgentConfig(model="gpt-5"),
+        provider=provider,
+        tools=[conflicting_local_tool],
+        mcp_servers=[stdio_server],
+    )
+
+    try:
+        with pytest.raises(ToolRegistrationError, match="demo__echo"):
+            await agent.run("Hello.")
+    finally:
+        await agent.aclose()
+
+
+@pytest.mark.asyncio
+async def test_agent_executes_streamable_http_mcp_tool(http_server: str) -> None:
+    provider = FakeProvider(
+        responses=[
+            ProviderResponse(
+                response_id="resp_1",
+                tool_calls=[
+                    {
+                        "call_id": "call_1",
+                        "name": "demohttp__add",
+                        "arguments": {"a": 2, "b": 3},
+                        "raw_arguments": '{"a":2,"b":3}',
+                    }
+                ],
+                output_items=[],
+                raw_response={"id": "resp_1"},
+            ),
+            ProviderResponse(
+                response_id="resp_2",
+                output_text="done",
+                output_items=[],
+                raw_response={"id": "resp_2"},
+            ),
+        ]
+    )
+    agent = Agent(
+        config=AgentConfig(model="gpt-5"),
+        provider=provider,
+        mcp_servers=[MCPServer.http(name="demohttp", url=http_server)],
+    )
+
+    try:
+        result = await agent.run("Use the HTTP MCP tool.")
+    finally:
+        await agent.aclose()
+
+    assert result.tool_results[0].output == "5"
+    assert result.mcp_calls[0].server_name == "demohttp"
+    assert result.mcp_calls[0].name == "add"
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _wait_for_http_server(url: str) -> None:
+    host = "127.0.0.1"
+    port = int(url.rsplit(":", 1)[1].split("/", 1)[0])
+    deadline = time.time() + 10
+    last_error: Exception | None = None
+    while time.time() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=1.0):
+                return
+        except Exception as exc:  # pragma: no cover - best-effort startup polling
+            last_error = exc
+        time.sleep(0.1)
+    raise RuntimeError(f"HTTP MCP fixture did not start: {last_error}")

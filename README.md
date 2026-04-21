@@ -259,49 +259,61 @@ Bad fits:
 
 ### MCP Servers
 
-Give the model access to a remote MCP server by passing `mcp_servers` to the agent:
+Give the model access to a client-side MCP server by passing `mcp_servers` to the agent:
 
 ```python
+import sys
+from pathlib import Path
+
 from simple_agent_base import Agent, AgentConfig, MCPServer
+
+fixture_server = Path("tests/fixtures/mcp_demo_server.py").resolve()
 
 agent = Agent(
     config=AgentConfig(model="gpt-5.4"),
     mcp_servers=[
-        MCPServer(
-            server_label="deepwiki",
-            server_url="https://mcp.deepwiki.com/mcp",
+        MCPServer.stdio(
+            name="demo",
+            command=sys.executable,
+            args=[str(fixture_server), "stdio"],
             require_approval=False,
         )
     ],
 )
 
-result = await agent.run("Summarize the modelcontextprotocol/python-sdk README.")
+result = await agent.run("Use the demo MCP echo tool with the message 'hello'.")
 print(result.output_text)
 for call in result.mcp_calls:
-    print(call.server_label, call.name, call.arguments)
+    print(call.server_name, call.name, call.arguments)
 ```
+
+This package supports client-side MCP only. The library owns the MCP connection, discovers tools locally, exposes them to the model as function tools, executes the chosen MCP call locally, and records the activity in `result.mcp_calls`.
 
 MCP servers are sent to the OpenAI Responses API as hosted tools — OpenAI handles tool discovery, invocation, and result streaming. Nothing runs locally.
 
 `MCPServer` fields:
 
-- `server_label`: required identifier
-- `server_url` or `connector_id`: exactly one is required (`connector_id` is for OpenAI service connectors such as `connector_gmail`)
-- `authorization`: OAuth access token
-- `headers`: additional HTTP headers for auth, tracing, etc.
-- `allowed_tools`: list of tool names to expose (or a filter object)
-- `require_approval`: optional override of the platform default approval policy; use `False` for trusted read-only servers, `True` to force approval, or pass a filter object per tool
-- `server_description`: optional free-text hint for the model
+- `name`: required server identifier used to namespace discovered tools
+- `allowed_tools`: optional list of MCP tool names to expose
+- `require_approval`: if `True`, the local `approval_handler` is invoked before each MCP call
+- `MCPServer.stdio(...)`: configure a subprocess-backed MCP server
+- `MCPServer.http(...)`: configure a streamable HTTP MCP server
 
 For trusted public or read-only servers, set `require_approval=False` to skip approval plumbing:
 
 ```python
+import sys
+from pathlib import Path
+
+fixture_server = Path("tests/fixtures/mcp_demo_server.py").resolve()
+
 agent = Agent(
     config=AgentConfig(model="gpt-5.4"),
     mcp_servers=[
-        MCPServer(
-            server_label="deepwiki",
-            server_url="https://mcp.deepwiki.com/mcp",
+        MCPServer.stdio(
+            name="demo",
+            command=sys.executable,
+            args=[str(fixture_server), "stdio"],
             require_approval=False,
         )
     ],
@@ -314,14 +326,14 @@ To gate tools, set `require_approval=True` and pass an `approval_handler`:
 from simple_agent_base import MCPApprovalRequest
 
 def approve(request: MCPApprovalRequest) -> bool:
-    return input(f"Run {request.name}? [y/N] ").lower() == "y"
+    return input(f"Run {request.server_name}.{request.name}? [y/N] ").lower() == "y"
 
 agent = Agent(
     config=AgentConfig(model="gpt-5.4"),
     mcp_servers=[
-        MCPServer(
-            server_label="gh",
-            server_url="https://gitmcp.io/owner/repo",
+        MCPServer.http(
+            name="gh",
+            url="http://127.0.0.1:8000/mcp",
             require_approval=True,
         )
     ],

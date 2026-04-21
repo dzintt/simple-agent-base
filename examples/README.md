@@ -144,11 +144,11 @@ Shows:
 
 ### `mcp_server.py`
 
-Use this when you want to give the model access to a remote MCP server.
+Use this when you want to bridge a client-side MCP server into the agent.
 
 Shows:
 
-- `MCPServer(server_label=..., server_url=...)`
+- `MCPServer.stdio(...)`
 - `Agent(mcp_servers=[...])`
 - reading `result.mcp_calls`
 - an `approval_handler` with `require_approval=True`

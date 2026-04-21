@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import argparse
 import asyncio
-import time
+import os
+import sys
 import tempfile
-import zlib
 import struct
+import time
+import zlib
 from pathlib import Path
 from typing import Any
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -33,11 +37,14 @@ class ColorAnswer(BaseModel):
 
 class CheckResult(BaseModel):
     name: str
-    ok: bool
+    status: Literal["pass", "fail", "skip"]
     error: str | None = None
 
 
 PARALLEL_TOOL_EVENTS: list[tuple[str, str, float]] = []
+
+
+class SkippedCheck(RuntimeError):
 
 
 @tool
@@ -85,6 +92,16 @@ def ensure(condition: bool, message: str) -> None:
 def make_config() -> AgentConfig:
     # Uses OPENAI_* env vars provided at runtime and adds deterministic defaults for the live check.
     return AgentConfig(temperature=0, timeout=120, max_turns=6)
+
+
+    fixture_path = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "mcp_demo_server.py"
+    ensure(fixture_path.exists(), f"Missing MCP fixture server: {fixture_path}")
+    return MCPServer.stdio(
+        name="demo",
+        command=sys.executable,
+        args=[str(fixture_path), "stdio"],
+        require_approval=require_approval,
+    )
 
 
 def make_red_png_file() -> Path:
@@ -243,7 +260,7 @@ def print_result_details(result: Any) -> None:
     for mcp_call in mcp_calls:
         output_preview = (mcp_call.output or "")[:120]
         print(
-            f"  - mcp {mcp_call.server_label}.{mcp_call.name}("
+            f"  - mcp {mcp_call.server_name}.{mcp_call.name}("
             f"arguments={mcp_call.arguments}) -> {output_preview!r}"
             + (f" error={mcp_call.error!r}" if mcp_call.error else "")
         )
@@ -261,13 +278,17 @@ async def run_check(name: str, fn: Any) -> CheckResult:
     section(name)
     try:
         await fn()
+    except SkippedCheck as exc:
+        print("STATUS: SKIP")
+        print(f"REASON: {exc}")
+        return CheckResult(name=name, status="skip", error=str(exc))
     except Exception as exc:
         print(f"STATUS: FAIL")
         print(f"ERROR: {exc}")
-        return CheckResult(name=name, ok=False, error=str(exc))
+        return CheckResult(name=name, status="fail", error=str(exc))
 
     print("STATUS: PASS")
-    return CheckResult(name=name, ok=True)
+    return CheckResult(name=name, status="pass")
 
 
 async def run_plain_text() -> None:
@@ -644,31 +665,27 @@ async def run_chat_with_image_follow_up() -> None:
 
 
 async def run_mcp_server() -> None:
+    server = make_demo_mcp_server(require_approval=False)
+
     agent = Agent(
         config=make_config(),
-        mcp_servers=[
-            MCPServer(
-                server_label="deepwiki",
-                server_url="https://mcp.deepwiki.com/mcp",
-                require_approval=False,
-            )
-        ],
+        mcp_servers=[server],
     )
     prompt = (
-        "Use the deepwiki MCP server to look up the repository "
-        "'modelcontextprotocol/python-sdk' and reply with a one-sentence summary."
+        "Use the demo MCP server echo tool with the message 'live-mcp'. "
+        "Then reply with one short sentence that includes the tool result."
     )
     try:
         print("MCP servers:")
-        print("- deepwiki -> https://mcp.deepwiki.com/mcp (require_approval=False)")
+        print(f"- demo -> stdio via {sys.executable} {server.args}")
         print_input("Sending prompt:", prompt)
         result = await agent.run(prompt)
         print_result_details(result)
         ensure(result.output_text.strip(), "MCP run returned empty output_text.")
         ensure(len(result.mcp_calls) >= 1, "Expected at least one mcp_call in result.mcp_calls.")
         ensure(
-            all(call.server_label == "deepwiki" for call in result.mcp_calls if call.server_label),
-            "Unexpected mcp_call server_label.",
+            all(call.server_name == "demo" for call in result.mcp_calls),
+            "Unexpected mcp_call server_name.",
         )
     finally:
         await agent.aclose()
@@ -680,29 +697,24 @@ async def run_mcp_server_with_approval() -> None:
     def approve(request: MCPApprovalRequest) -> bool:
         approvals_seen.append(request)
         print(
-            f"- approval requested: {request.server_label}.{request.name}("
+            f"- approval requested: {request.server_name}.{request.name}("
             f"arguments={request.arguments})"
         )
         return True
 
+    server = make_demo_mcp_server(require_approval=True)
+
     agent = Agent(
         config=make_config(),
-        mcp_servers=[
-            MCPServer(
-                server_label="deepwiki",
-                server_url="https://mcp.deepwiki.com/mcp",
-                require_approval=True,
-            )
-        ],
+        mcp_servers=[server],
         approval_handler=approve,
     )
     prompt = (
-        "Use the deepwiki MCP server to find any one fact about "
-        "'modelcontextprotocol/python-sdk' and reply in one short sentence."
+        "Use the demo MCP server add tool with 2 and 3, then reply with one short sentence."
     )
     try:
         print("MCP servers:")
-        print("- deepwiki -> https://mcp.deepwiki.com/mcp (require_approval=True)")
+        print(f"- demo -> stdio via {sys.executable} {server.args} (require_approval=True)")
         print_input("Sending prompt:", prompt)
         result = await agent.run(prompt)
         print_result_details(result)
@@ -715,26 +727,23 @@ async def run_mcp_server_with_approval() -> None:
 
 
 async def run_mcp_streaming() -> None:
+    await ensure_streaming_function_calls_supported()
+    server = make_demo_mcp_server(require_approval=False)
+
     agent = Agent(
         config=make_config(),
-        mcp_servers=[
-            MCPServer(
-                server_label="deepwiki",
-                server_url="https://mcp.deepwiki.com/mcp",
-                require_approval=False,
-            )
-        ],
+        mcp_servers=[server],
     )
     prompt = (
-        "Use the deepwiki MCP server to look up 'modelcontextprotocol/python-sdk' "
-        "and reply with one short sentence."
+        "You must call the demo MCP server echo tool with the message 'stream-mcp'. "
+        "Do not answer until after you use the tool, then reply with one short sentence."
     )
     saw_mcp_started = False
     saw_mcp_completed = False
     final_result = None
     try:
         print("MCP servers:")
-        print("- deepwiki -> https://mcp.deepwiki.com/mcp (require_approval=False)")
+        print(f"- demo -> stdio via {sys.executable} {server.args}")
         print_input("Sending prompt:", prompt)
         print("Streaming events:")
         async for event in agent.stream(prompt):
@@ -743,13 +752,13 @@ async def run_mcp_streaming() -> None:
             elif event.type == "mcp_call_started":
                 saw_mcp_started = True
                 mcp_call = event.mcp_call
-                label = mcp_call.server_label if mcp_call else None
+                label = mcp_call.server_name if mcp_call else None
                 name = mcp_call.name if mcp_call else None
                 print(f"- mcp_call_started: {label}.{name}")
             elif event.type == "mcp_call_completed":
                 saw_mcp_completed = True
                 mcp_call = event.mcp_call
-                label = mcp_call.server_label if mcp_call else None
+                label = mcp_call.server_name if mcp_call else None
                 name = mcp_call.name if mcp_call else None
                 print(f"- mcp_call_completed: {label}.{name}")
             elif event.type == "completed" and event.result is not None:
@@ -769,34 +778,77 @@ async def run_mcp_streaming() -> None:
         await agent.aclose()
 
 
+async def ensure_streaming_function_calls_supported() -> None:
+    agent = Agent(config=make_config(), tools=[ping_tool])
+    saw_tool_event = False
+    try:
+        async for event in agent.stream(
+            "Call the tool named ping_tool with the message 'stream-capability'. Then say done."
+        ):
+            if event.type == "tool_call_completed":
+                saw_tool_event = True
+                break
+    finally:
+        await agent.aclose()
+
+    if not saw_tool_event:
+        raise SkippedCheck(
+            "Configured backend did not issue function-tool calls during streaming, so MCP streaming "
+            "cannot be validated in this environment."
+        )
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run live end-to-end checks.")
+    parser.add_argument(
+        "--mcp-only",
+        action="store_true",
+        help="Run only the client-side MCP live checks.",
+    )
+    return parser.parse_args()
+
+
 async def main() -> None:
+    args = parse_args()
     print_config_summary()
 
-    results = [
-        await run_check("Plain Text", run_plain_text),
-        await run_check("Structured Output", run_structured_output),
-        await run_check("System Prompt", run_system_prompt),
-        await run_check("Sync Usage", run_sync_usage),
-        await run_check("Tool Call", run_tool_call),
-        await run_check("Parallel Tool Calls", run_parallel_tool_calls),
-        await run_check("Chat History", run_chat_history),
-        await run_check("Chat Persistence", run_chat_persistence),
-        await run_check("File Input", run_file_input),
-        await run_check("Streaming", run_streaming),
-        await run_check("Image Structured Output", run_image_structured_output),
-        await run_check("Chat With Image Follow-Up", run_chat_with_image_follow_up),
-        await run_check("MCP Server", run_mcp_server),
-        await run_check("MCP Server With Approval", run_mcp_server_with_approval),
-        await run_check("MCP Streaming", run_mcp_streaming),
-    ]
+    checks: list[tuple[str, Any]]
+    if args.mcp_only:
+        checks = [
+            ("MCP Server", run_mcp_server),
+            ("MCP Server With Approval", run_mcp_server_with_approval),
+            ("MCP Streaming", run_mcp_streaming),
+        ]
+    else:
+        checks = [
+            ("Plain Text", run_plain_text),
+            ("Structured Output", run_structured_output),
+            ("System Prompt", run_system_prompt),
+            ("Sync Usage", run_sync_usage),
+            ("Tool Call", run_tool_call),
+            ("Parallel Tool Calls", run_parallel_tool_calls),
+            ("Chat History", run_chat_history),
+            ("Chat Persistence", run_chat_persistence),
+            ("File Input", run_file_input),
+            ("Streaming", run_streaming),
+            ("Image Structured Output", run_image_structured_output),
+            ("Chat With Image Follow-Up", run_chat_with_image_follow_up),
+            ("MCP Server", run_mcp_server),
+            ("MCP Server With Approval", run_mcp_server_with_approval),
+            ("MCP Streaming", run_mcp_streaming),
+        ]
+
+    results = [await run_check(name, fn) for name, fn in checks]
 
     section("Summary")
-    passed = [result for result in results if result.ok]
-    failed = [result for result in results if not result.ok]
+    passed = [result for result in results if result.status == "pass"]
+    failed = [result for result in results if result.status == "fail"]
+    skipped = [result for result in results if result.status == "skip"]
     print(f"Passed: {len(passed)}")
     print(f"Failed: {len(failed)}")
+    print(f"Skipped: {len(skipped)}")
     for result in results:
-        status = "PASS" if result.ok else "FAIL"
+        status = result.status.upper()
         suffix = "" if result.error is None else f" -> {result.error}"
         print(f"- {status}: {result.name}{suffix}")
 

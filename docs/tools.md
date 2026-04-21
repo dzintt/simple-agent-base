@@ -416,6 +416,8 @@ asyncio.run(main())
 
 ## MCP Servers
 
+Note: the MCP support in this package is client-side only. The hosted OpenAI `{"type":"mcp"}` model is no longer supported. Prefer `MCPServer.stdio(...)` or `MCPServer.http(...)` as shown in [examples/mcp_server.py](../examples/mcp_server.py).
+
 In addition to local Python tools, you can give the model access to remote MCP (Model Context Protocol) servers. These are *hosted* tools — OpenAI's Responses API talks to the MCP server on your behalf. No local code runs per call.
 
 ```python

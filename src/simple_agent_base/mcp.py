@@ -1,137 +1,348 @@
 from __future__ import annotations
 
 import json
+import uuid
 from collections.abc import Awaitable, Callable
-from typing import Any
+from contextlib import AsyncExitStack
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Literal
 
+import httpx
+from mcp import ClientSession, StdioServerParameters, types as mcp_types
+from mcp.client.stdio import stdio_client
+from mcp.client.streamable_http import streamable_http_client
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from simple_agent_base.errors import ToolExecutionError, ToolRegistrationError
 
 
 class MCPServer(BaseModel):
-    """Configuration for a hosted (remote) MCP server.
-
-    Mirrors OpenAI's ``tools=[{"type": "mcp", ...}]`` entry. Exactly one of
-    ``server_url`` or ``connector_id`` is required.
-    """
+    """Configuration for a client-side MCP server connection."""
 
     model_config = ConfigDict(extra="forbid")
 
-    server_label: str
-    server_url: str | None = None
-    connector_id: str | None = None
-    authorization: str | None = None
+    name: str
+    transport: Literal["stdio", "streamable_http"]
+    allowed_tools: list[str] | None = None
+    require_approval: bool = False
+    command: str | None = None
+    args: list[str] = Field(default_factory=list)
+    env: dict[str, str] | None = None
+    cwd: str | None = None
+    url: str | None = None
     headers: dict[str, str] | None = None
-    allowed_tools: list[str] | dict[str, Any] | None = None
-    require_approval: bool | dict[str, Any] | None = None
-    server_description: str | None = None
 
     @model_validator(mode="after")
-    def _validate_source(self) -> MCPServer:
-        provided = [value for value in (self.server_url, self.connector_id) if value]
-        if len(provided) != 1:
-            raise ValueError(
-                "MCPServer requires exactly one of server_url or connector_id."
-            )
+    def _validate_transport_fields(self) -> MCPServer:
+        if self.transport == "stdio":
+            if not self.command:
+                raise ValueError("MCPServer transport='stdio' requires command.")
+            if self.url is not None or self.headers is not None:
+                raise ValueError("MCPServer transport='stdio' does not accept url or headers.")
+        elif self.transport == "streamable_http":
+            if not self.url:
+                raise ValueError("MCPServer transport='streamable_http' requires url.")
+            if self.command is not None or self.args or self.env is not None or self.cwd is not None:
+                raise ValueError(
+                    "MCPServer transport='streamable_http' does not accept command, args, env, or cwd."
+                )
         return self
 
-    def to_tool_param(self) -> dict[str, Any]:
-        """Serialize to the OpenAI Responses API ``{"type": "mcp", ...}`` shape."""
-        payload: dict[str, Any] = {
-            "type": "mcp",
-            "server_label": self.server_label,
-        }
-        if self.server_url is not None:
-            payload["server_url"] = self.server_url
-        if self.connector_id is not None:
-            payload["connector_id"] = self.connector_id
-        if self.authorization is not None:
-            payload["authorization"] = self.authorization
-        if self.headers is not None:
-            payload["headers"] = dict(self.headers)
-        if self.server_description is not None:
-            payload["server_description"] = self.server_description
-        if self.allowed_tools is not None:
-            if isinstance(self.allowed_tools, list):
-                payload["allowed_tools"] = list(self.allowed_tools)
-            else:
-                payload["allowed_tools"] = dict(self.allowed_tools)
-        if self.require_approval is not None:
-            if isinstance(self.require_approval, bool):
-                payload["require_approval"] = "always" if self.require_approval else "never"
-            else:
-                payload["require_approval"] = dict(self.require_approval)
-        return payload
+    @classmethod
+    def stdio(
+        cls,
+        *,
+        name: str,
+        command: str,
+        args: list[str] | None = None,
+        env: dict[str, str] | None = None,
+        cwd: str | Path | None = None,
+        allowed_tools: list[str] | None = None,
+        require_approval: bool = False,
+    ) -> MCPServer:
+        return cls(
+            name=name,
+            transport="stdio",
+            command=command,
+            args=list(args or []),
+            env=dict(env) if env is not None else None,
+            cwd=str(cwd) if cwd is not None else None,
+            allowed_tools=list(allowed_tools) if allowed_tools is not None else None,
+            require_approval=require_approval,
+        )
+
+    @classmethod
+    def http(
+        cls,
+        *,
+        name: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        allowed_tools: list[str] | None = None,
+        require_approval: bool = False,
+    ) -> MCPServer:
+        return cls(
+            name=name,
+            transport="streamable_http",
+            url=url,
+            headers=dict(headers) if headers is not None else None,
+            allowed_tools=list(allowed_tools) if allowed_tools is not None else None,
+            require_approval=require_approval,
+        )
 
 
 class MCPApprovalRequest(BaseModel):
-    """A request from the model to approve an MCP tool invocation."""
+    """A local approval request before invoking a bridged MCP tool."""
 
     model_config = ConfigDict(extra="forbid")
 
     id: str
-    server_label: str
+    server_name: str
     name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
 
 
 class MCPCallRecord(BaseModel):
-    """A record of an MCP tool invocation performed by the Responses API."""
+    """A record of a client-side MCP tool invocation."""
 
     model_config = ConfigDict(extra="forbid")
 
     id: str | None = None
-    server_label: str | None = None
+    server_name: str
     name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
     output: str | None = None
     error: str | None = None
 
 
-def parse_mcp_arguments(raw_arguments: Any) -> dict[str, Any]:
-    """Convert MCP string arguments into a dict when possible."""
-    if isinstance(raw_arguments, str) and raw_arguments:
-        try:
-            parsed = json.loads(raw_arguments)
-        except json.JSONDecodeError:
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
-
-    if isinstance(raw_arguments, dict):
-        return raw_arguments
-
-    return {}
+ApprovalHandler = Callable[[MCPApprovalRequest], bool | Awaitable[bool]]
 
 
-def mcp_call_record_from_item(item: Any) -> MCPCallRecord:
-    """Build an MCPCallRecord from an SDK response item or plain dict."""
-    if isinstance(item, dict):
-        getter = item.get
-    else:
-        getter = lambda key, default=None: getattr(item, key, default)
+@dataclass(slots=True)
+class MCPToolDefinition:
+    server_name: str
+    tool_name: str
+    namespaced_name: str
+    description: str
+    parameters: dict[str, Any]
+    require_approval: bool
 
-    return MCPCallRecord(
-        id=getter("id"),
-        server_label=getter("server_label"),
-        name=getter("name", ""),
-        arguments=parse_mcp_arguments(getter("arguments")),
-        output=getter("output"),
-        error=getter("error"),
-    )
+    def to_openai_tool(self) -> dict[str, Any]:
+        return {
+            "type": "function",
+            "name": self.namespaced_name,
+            "description": self.description,
+            "parameters": dict(self.parameters),
+        }
 
 
-def mcp_approval_request_from_item(item: Any) -> MCPApprovalRequest:
-    """Build an MCPApprovalRequest from an SDK response item or plain dict."""
-    if isinstance(item, dict):
-        getter = item.get
-    else:
-        getter = lambda key, default=None: getattr(item, key, default)
-
+def build_mcp_approval_request(
+    *,
+    request_id: str | None = None,
+    server_name: str,
+    tool_name: str,
+    arguments: dict[str, Any],
+) -> MCPApprovalRequest:
     return MCPApprovalRequest(
-        id=getter("id", ""),
-        server_label=getter("server_label", ""),
-        name=getter("name", ""),
-        arguments=parse_mcp_arguments(getter("arguments")),
+        id=request_id or f"mcp-approval-{uuid.uuid4().hex}",
+        server_name=server_name,
+        name=tool_name,
+        arguments=dict(arguments),
     )
 
 
-ApprovalHandler = Callable[[MCPApprovalRequest], "bool | Awaitable[bool]"]
+def normalize_mcp_tool_result(result: mcp_types.CallToolResult) -> str:
+    text_blocks: list[str] = []
+    for block in getattr(result, "content", []) or []:
+        if getattr(block, "type", None) == "text":
+            text = getattr(block, "text", None)
+            if isinstance(text, str) and text:
+                text_blocks.append(text)
+
+    if text_blocks:
+        return "\n".join(text_blocks)
+
+    structured = getattr(result, "structuredContent", None)
+    if structured is not None:
+        return json.dumps(structured, ensure_ascii=False, default=str)
+
+    if hasattr(result, "model_dump"):
+        payload = result.model_dump(mode="json", warnings="none")
+    else:
+        payload = result
+    return json.dumps(payload, ensure_ascii=False, default=str)
+
+
+def mcp_result_payload(result: mcp_types.CallToolResult) -> Any:
+    if hasattr(result, "model_dump"):
+        return result.model_dump(mode="json", warnings="none")
+    return result
+
+
+class MCPClientBridge:
+    def __init__(self, server: MCPServer) -> None:
+        self.server = server
+        self._stack: AsyncExitStack | None = None
+        self._session: ClientSession | None = None
+        self._tools: dict[str, MCPToolDefinition] | None = None
+
+    async def list_tools(self) -> list[MCPToolDefinition]:
+        await self._ensure_initialized()
+        if self._tools is None:
+            tools: dict[str, MCPToolDefinition] = {}
+            cursor: str | None = None
+            allowed = set(self.server.allowed_tools or [])
+
+            while True:
+                response = await self._session.list_tools(cursor=cursor)
+                for tool in response.tools:
+                    if allowed and tool.name not in allowed:
+                        continue
+                    definition = self._build_tool_definition(tool)
+                    if definition.namespaced_name in tools:
+                        raise ToolRegistrationError(
+                            f"MCP tool '{definition.namespaced_name}' is already registered."
+                        )
+                    tools[definition.namespaced_name] = definition
+                cursor = response.nextCursor
+                if cursor is None:
+                    break
+
+            self._tools = tools
+
+        return list(self._tools.values())
+
+    async def call_tool(
+        self,
+        *,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> mcp_types.CallToolResult:
+        await self._ensure_initialized()
+        return await self._session.call_tool(tool_name, arguments=arguments)
+
+    def get_tool(self, namespaced_name: str) -> MCPToolDefinition:
+        if self._tools is None:
+            raise ToolRegistrationError("MCP tools have not been initialized.")
+        try:
+            return self._tools[namespaced_name]
+        except KeyError as exc:
+            raise ToolRegistrationError(f"MCP tool '{namespaced_name}' is not registered.") from exc
+
+    async def close(self) -> None:
+        if self._stack is not None:
+            try:
+                await self._stack.aclose()
+            finally:
+                self._stack = None
+                self._session = None
+                self._tools = None
+
+    async def _ensure_initialized(self) -> None:
+        if self._session is not None:
+            return
+
+        stack = AsyncExitStack()
+        if self.server.transport == "stdio":
+            params = StdioServerParameters(
+                command=self.server.command,
+                args=list(self.server.args),
+                env=dict(self.server.env) if self.server.env is not None else None,
+                cwd=self.server.cwd,
+            )
+            read_stream, write_stream = await stack.enter_async_context(stdio_client(params))
+        else:
+            http_client = await stack.enter_async_context(
+                httpx.AsyncClient(headers=dict(self.server.headers or {}))
+            )
+            read_stream, write_stream, _ = await stack.enter_async_context(
+                streamable_http_client(self.server.url, http_client=http_client)
+            )
+
+        session = ClientSession(read_stream, write_stream)
+        await stack.enter_async_context(session)
+        await session.initialize()
+
+        self._stack = stack
+        self._session = session
+
+    def _build_tool_definition(self, tool: mcp_types.Tool) -> MCPToolDefinition:
+        description = (tool.description or "").strip() or f"Run the {tool.name} tool from {self.server.name}."
+        parameters = dict(tool.inputSchema or _empty_parameters_schema())
+        return MCPToolDefinition(
+            server_name=self.server.name,
+            tool_name=tool.name,
+            namespaced_name=f"{self.server.name}__{tool.name}",
+            description=description,
+            parameters=parameters,
+            require_approval=self.server.require_approval,
+        )
+
+
+class MCPBridgeManager:
+    def __init__(self, servers: list[MCPServer] | None = None) -> None:
+        self._bridges = {server.name: MCPClientBridge(server) for server in servers or []}
+        self._tools_by_name: dict[str, tuple[MCPClientBridge, MCPToolDefinition]] = {}
+        self._initialized = False
+
+    async def ensure_initialized(self) -> None:
+        if self._initialized:
+            return
+
+        tools_by_name: dict[str, tuple[MCPClientBridge, MCPToolDefinition]] = {}
+        for bridge in self._bridges.values():
+            for tool in await bridge.list_tools():
+                if tool.namespaced_name in tools_by_name:
+                    raise ToolRegistrationError(f"Tool '{tool.namespaced_name}' is already registered.")
+                tools_by_name[tool.namespaced_name] = (bridge, tool)
+
+        self._tools_by_name = tools_by_name
+        self._initialized = True
+
+    def has_tool(self, name: str) -> bool:
+        return name in self._tools_by_name
+
+    def get_tool(self, name: str) -> MCPToolDefinition:
+        try:
+            return self._tools_by_name[name][1]
+        except KeyError as exc:
+            raise ToolRegistrationError(f"MCP tool '{name}' is not registered.") from exc
+
+    def to_openai_tools(self) -> list[dict[str, Any]]:
+        return [tool.to_openai_tool() for _, tool in self._tools_by_name.values()]
+
+    def tool_names(self) -> set[str]:
+        return set(self._tools_by_name)
+
+    async def call_tool(
+        self,
+        *,
+        namespaced_name: str,
+        arguments: dict[str, Any],
+    ) -> tuple[MCPToolDefinition, mcp_types.CallToolResult]:
+        bridge, tool = self._tools_by_name[namespaced_name]
+        result = await bridge.call_tool(tool_name=tool.tool_name, arguments=arguments)
+        return tool, result
+
+    async def close(self) -> None:
+        for bridge in self._bridges.values():
+            await bridge.close()
+        self._tools_by_name = {}
+        self._initialized = False
+
+
+def run_approval_handler(
+    approval_handler: ApprovalHandler,
+    request: MCPApprovalRequest,
+) -> bool | Awaitable[bool]:
+    result = approval_handler(request)
+    return result
+
+
+def _empty_parameters_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    }
