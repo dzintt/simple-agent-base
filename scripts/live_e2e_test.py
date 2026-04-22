@@ -966,10 +966,10 @@ async def main() -> None:
     checks: list[tuple[str, Any]]
     if args.mcp_only:
         checks = [
-            # ("MCP Server", run_mcp_server),
-            # ("MCP Server With Approval", run_mcp_server_with_approval),
-            # ("MCP HTTP Server", run_mcp_http_server),
-            # ("MCP Streaming", run_mcp_streaming),
+            ("MCP Server", run_mcp_server),
+            ("MCP Server With Approval", run_mcp_server_with_approval),
+            ("MCP HTTP Server", run_mcp_http_server),
+            ("MCP Streaming", run_mcp_streaming),
         ]
     else:
         checks = [
