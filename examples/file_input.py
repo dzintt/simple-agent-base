@@ -4,9 +4,7 @@ from simple_agent_base import Agent, AgentConfig, ChatMessage, FilePart, TextPar
 
 
 async def main() -> None:
-    agent = Agent(config=AgentConfig(model="gpt-5.4"))
-
-    try:
+    async with Agent(config=AgentConfig(model="gpt-5.4")) as agent:
         result = await agent.run(
             [
                 ChatMessage(
@@ -19,8 +17,6 @@ async def main() -> None:
             ]
         )
         print(result.output_text)
-    finally:
-        await agent.aclose()
 
 
 if __name__ == "__main__":

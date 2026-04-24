@@ -319,6 +319,38 @@ def test_close_wraps_aclose() -> None:
 
 
 @pytest.mark.asyncio
+async def test_async_context_manager_closes_provider() -> None:
+    provider = ClosableFakeProvider([])
+
+    async with Agent(config=AgentConfig(model="gpt-5"), provider=provider) as agent:
+        assert isinstance(agent, Agent)
+        assert provider.closed is False
+
+    assert provider.closed is True
+
+
+def test_sync_context_manager_closes_provider() -> None:
+    provider = ClosableFakeProvider([])
+
+    with Agent(config=AgentConfig(model="gpt-5"), provider=provider) as agent:
+        assert isinstance(agent, Agent)
+        assert provider.closed is False
+
+    assert provider.closed is True
+
+
+@pytest.mark.asyncio
+async def test_async_context_manager_closes_on_exception() -> None:
+    provider = ClosableFakeProvider([])
+
+    with pytest.raises(RuntimeError, match="boom"):
+        async with Agent(config=AgentConfig(model="gpt-5"), provider=provider):
+            raise RuntimeError("boom")
+
+    assert provider.closed is True
+
+
+@pytest.mark.asyncio
 async def test_run_sync_raises_inside_running_event_loop() -> None:
     agent = Agent(config=AgentConfig(model="gpt-5"), provider=FakeProvider([]))
 

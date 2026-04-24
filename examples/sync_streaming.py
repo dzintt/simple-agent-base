@@ -2,9 +2,7 @@ from simple_agent_base import Agent, AgentConfig
 
 
 def main() -> None:
-    agent = Agent(config=AgentConfig(model="gpt-5.4"))
-
-    try:
+    with Agent(config=AgentConfig(model="gpt-5.4")) as agent:
         for event in agent.stream_sync("Explain async IO in one short sentence."):
             if event.type == "text_delta" and event.delta:
                 print(event.delta, end="")
@@ -13,8 +11,6 @@ def main() -> None:
                 print()
                 print("Final text:")
                 print(event.result.output_text if event.result is not None else "")
-    finally:
-        agent.close()
 
 
 if __name__ == "__main__":

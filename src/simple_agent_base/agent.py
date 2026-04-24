@@ -144,6 +144,18 @@ class Agent:
         finally:
             await self.provider.close()
 
+    async def __aenter__(self) -> "Agent":
+        return self
+
+    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+        await self.aclose()
+
+    def __enter__(self) -> "Agent":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        self.close()
+
     def run_sync(
         self,
         input_data: str | Sequence[MessageInput],

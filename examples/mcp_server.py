@@ -30,18 +30,14 @@ def build_demo_server(*, require_approval: bool) -> MCPServer:
 
 
 async def basic_mcp_run() -> None:
-    agent = Agent(
+    async with Agent(
         config=AgentConfig(model=os.environ.get("OPENAI_MODEL", "gpt-5")),
         mcp_servers=[build_demo_server(require_approval=False)],
-    )
-
-    try:
+    ) as agent:
         result = await agent.run(
             "Use the demo MCP echo tool with the message 'hello from MCP' "
             "and reply with one short sentence that includes the tool result."
         )
-    finally:
-        await agent.aclose()
 
     print("=== Model output ===")
     print(result.output_text)
@@ -56,18 +52,14 @@ async def mcp_run_with_approvals() -> None:
         print(f"[approval] {request.server_name}.{request.name}({request.arguments})")
         return True
 
-    agent = Agent(
+    async with Agent(
         config=AgentConfig(model=os.environ.get("OPENAI_MODEL", "gpt-5")),
         mcp_servers=[build_demo_server(require_approval=True)],
         approval_handler=approve,
-    )
-
-    try:
+    ) as agent:
         result = await agent.run(
             "Use the demo MCP add tool with 2 and 3, then reply with one short sentence."
         )
-    finally:
-        await agent.aclose()
 
     print("=== With-approval output ===")
     print(result.output_text)

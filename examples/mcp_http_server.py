@@ -75,18 +75,16 @@ class DemoHTTPServer:
 async def basic_http_mcp_run() -> None:
     server = DemoHTTPServer()
     server.start()
-    agent = Agent(
-        config=AgentConfig(model=os.environ.get("OPENAI_MODEL", "gpt-5")),
-        mcp_servers=[MCPServer.http(name="demohttp", url=server.url)],
-    )
-
     try:
-        result = await agent.run(
-            "Use the demohttp MCP add tool with 2 and 3, "
-            "then reply with one short sentence that includes the result."
-        )
+        async with Agent(
+            config=AgentConfig(model=os.environ.get("OPENAI_MODEL", "gpt-5")),
+            mcp_servers=[MCPServer.http(name="demohttp", url=server.url)],
+        ) as agent:
+            result = await agent.run(
+                "Use the demohttp MCP add tool with 2 and 3, "
+                "then reply with one short sentence that includes the result."
+            )
     finally:
-        await agent.aclose()
         server.stop()
 
     print("=== Server URL ===")
@@ -107,19 +105,17 @@ async def http_mcp_run_with_approvals() -> None:
 
     server = DemoHTTPServer()
     server.start()
-    agent = Agent(
-        config=AgentConfig(model=os.environ.get("OPENAI_MODEL", "gpt-5")),
-        mcp_servers=[MCPServer.http(name="demohttp", url=server.url, require_approval=True)],
-        approval_handler=approve,
-    )
-
     try:
-        result = await agent.run(
-            "Use the demohttp MCP echo tool with the message 'hello over HTTP', "
-            "then reply with one short sentence that includes the tool result."
-        )
+        async with Agent(
+            config=AgentConfig(model=os.environ.get("OPENAI_MODEL", "gpt-5")),
+            mcp_servers=[MCPServer.http(name="demohttp", url=server.url, require_approval=True)],
+            approval_handler=approve,
+        ) as agent:
+            result = await agent.run(
+                "Use the demohttp MCP echo tool with the message 'hello over HTTP', "
+                "then reply with one short sentence that includes the tool result."
+            )
     finally:
-        await agent.aclose()
         server.stop()
 
     print("=== With-approval output ===")

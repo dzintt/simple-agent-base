@@ -61,12 +61,10 @@ class StaticProvider:
 
 
 async def main() -> None:
-    agent = Agent(
+    async with Agent(
         config=AgentConfig(model="static-demo"),
         provider=StaticProvider(),
-    )
-
-    try:
+    ) as agent:
         result = await agent.run("Say hello.")
         print(result.output_text)
 
@@ -74,8 +72,6 @@ async def main() -> None:
             if event.type == "text_delta" and event.delta:
                 print(event.delta, end="")
         print()
-    finally:
-        await agent.aclose()
 
 
 if __name__ == "__main__":

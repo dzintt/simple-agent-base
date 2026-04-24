@@ -22,12 +22,10 @@ async def get_weather(city: str) -> str:
 
 
 async def main() -> None:
-    agent = Agent(
+    async with Agent(
         config=AgentConfig(model="gpt-5.4"),
         tools=[get_weather],
-    )
-
-    try:
+    ) as agent:
         result = await agent.run(
             "Use the weather tool for San Francisco and return a structured weather answer.",
             response_model=WeatherAnswer,
@@ -42,8 +40,6 @@ async def main() -> None:
         print("Tool results:")
         for tool_result in result.tool_results:
             print(f"- {tool_result.name}: {tool_result.output}")
-    finally:
-        await agent.aclose()
 
 
 if __name__ == "__main__":

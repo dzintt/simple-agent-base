@@ -4,10 +4,9 @@ from simple_agent_base import Agent, AgentConfig
 
 
 async def main() -> None:
-    agent = Agent(config=AgentConfig(model="gpt-5.4"))
-    chat = agent.chat(system_prompt="You are concise.")
+    async with Agent(config=AgentConfig(model="gpt-5.4")) as agent:
+        chat = agent.chat(system_prompt="You are concise.")
 
-    try:
         await chat.run("My name is Anson.")
         await chat.run("My favorite color is teal.")
 
@@ -28,8 +27,6 @@ async def main() -> None:
 
         print("Restored follow-up reply:")
         print(result.output_text)
-    finally:
-        await agent.aclose()
 
 
 if __name__ == "__main__":

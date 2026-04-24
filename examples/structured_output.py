@@ -12,9 +12,7 @@ class Person(BaseModel):
 
 
 async def main() -> None:
-    agent = Agent(config=AgentConfig(model="gpt-5.4"))
-
-    try:
+    async with Agent(config=AgentConfig(model="gpt-5.4")) as agent:
         result = await agent.run(
             "Extract a person from this sentence: Sarah is 29 years old and lives in Seattle.",
             response_model=Person,
@@ -25,8 +23,6 @@ async def main() -> None:
         print()
         print("Parsed object:")
         print(result.output_data)
-    finally:
-        await agent.aclose()
 
 
 if __name__ == "__main__":

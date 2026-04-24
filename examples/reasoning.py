@@ -4,14 +4,12 @@ from simple_agent_base import Agent, AgentConfig
 
 
 async def main() -> None:
-    agent = Agent(
+    async with Agent(
         config=AgentConfig(
             model="gpt-5.4",
             reasoning_effort="high",
         )
-    )
-
-    try:
+    ) as agent:
         async for event in agent.stream(
             "Think carefully, then explain in one short sentence why async I/O helps agent workloads."
         ):
@@ -27,8 +25,6 @@ async def main() -> None:
                 print()
                 print("Reasoning summary:")
                 print(event.result.reasoning_summary)
-    finally:
-        await agent.aclose()
 
 
 if __name__ == "__main__":

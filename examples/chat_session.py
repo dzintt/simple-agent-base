@@ -4,10 +4,9 @@ from simple_agent_base import Agent, AgentConfig
 
 
 async def main() -> None:
-    agent = Agent(config=AgentConfig(model="gpt-5.4"))
-    chat = agent.chat()
+    async with Agent(config=AgentConfig(model="gpt-5.4")) as agent:
+        chat = agent.chat()
 
-    try:
         first = await chat.run("My name is Anson.")
         second = await chat.run("What name did I tell you?")
 
@@ -20,8 +19,6 @@ async def main() -> None:
         print("Conversation history:")
         for message in chat.history:
             print(f"- {message.role}: {message.content}")
-    finally:
-        await agent.aclose()
 
 
 if __name__ == "__main__":

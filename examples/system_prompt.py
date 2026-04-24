@@ -4,12 +4,10 @@ from simple_agent_base import Agent, AgentConfig
 
 
 async def main() -> None:
-    agent = Agent(
+    async with Agent(
         config=AgentConfig(model="gpt-5.4"),
         system_prompt="You are concise and helpful.",
-    )
-
-    try:
+    ) as agent:
         default_result = await agent.run("Say hello in five words or fewer.")
         override_result = await agent.run(
             "Explain Python decorators in one short paragraph.",
@@ -31,8 +29,6 @@ async def main() -> None:
         print()
         print("Chat session result 2:")
         print(second_chat.output_text)
-    finally:
-        await agent.aclose()
 
 
 if __name__ == "__main__":

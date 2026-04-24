@@ -18,15 +18,13 @@ async def get_news(city: str) -> str:
 
 
 async def main() -> None:
-    agent = Agent(
+    async with Agent(
         config=AgentConfig(
             model="gpt-5.4",
             parallel_tool_calls=True,
         ),
         tools=[get_weather, get_news],
-    )
-
-    try:
+    ) as agent:
         result = await agent.run(
             "Call both tools for San Francisco, then summarize the results in one short paragraph."
         )
@@ -36,8 +34,6 @@ async def main() -> None:
         print("Tool results:")
         for tool_result in result.tool_results:
             print(f"- {tool_result.name}: {tool_result.output}")
-    finally:
-        await agent.aclose()
 
 
 if __name__ == "__main__":

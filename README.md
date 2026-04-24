@@ -58,21 +58,19 @@ async def ping(message: str) -> str:
 
 
 async def main() -> None:
-    agent = Agent(
+    async with Agent(
         config=AgentConfig(model="gpt-5.4"),
         tools=[ping],
         system_prompt="You are concise.",
-    )
-
-    try:
+    ) as agent:
         result = await agent.run("Call ping with hello and tell me the result.")
         print(result.output_text)
-    finally:
-        await agent.aclose()
 
 
 asyncio.run(main())
 ```
+
+`Agent` supports `async with` (and `with` for sync code) so cleanup happens automatically. If you prefer explicit lifecycle management, `await agent.aclose()` and `agent.close()` still work.
 
 ## Core API
 
@@ -334,14 +332,12 @@ Environment variables:
 The package is async-first, but synchronous programs can use:
 
 ```python
-agent = Agent(config=AgentConfig(model="gpt-5.4"))
-
-try:
+with Agent(config=AgentConfig(model="gpt-5.4")) as agent:
     result = agent.run_sync("Say hello.")
     print(result.output_text)
-finally:
-    agent.close()
 ```
+
+`agent.close()` is also available if you'd rather manage the lifecycle yourself.
 
 Do not call `run_sync()` or `stream_sync()` from inside an existing event loop.
 
