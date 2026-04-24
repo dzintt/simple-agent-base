@@ -19,6 +19,7 @@ from .base import (
     ProviderReasoningDeltaEvent,
     ProviderResponse,
     ProviderTextDeltaEvent,
+    ProviderToolArgumentsDeltaEvent,
 )
 
 
@@ -88,6 +89,7 @@ class OpenAIResponsesProvider:
         response_model: type[BaseModel] | None = None,
     ) -> AsyncIterator[ProviderEvent]:
         reasoning_summary = _ReasoningSummaryAccumulator()
+        function_call_meta: dict[str, tuple[str | None, str | None]] = {}
 
         try:
             async with self._client.responses.stream(
@@ -100,6 +102,21 @@ class OpenAIResponsesProvider:
                         yield ProviderReasoningDeltaEvent(delta=reasoning_summary.add_delta(event))
                     elif event.type == "response.reasoning_summary_text.done":
                         reasoning_summary.add_done_fallback(event)
+                    elif event.type == "response.output_item.added":
+                        item = getattr(event, "item", None)
+                        if getattr(item, "type", None) == "function_call":
+                            function_call_meta[item.id] = (
+                                getattr(item, "call_id", None),
+                                getattr(item, "name", None),
+                            )
+                    elif event.type == "response.function_call_arguments.delta":
+                        call_id, name = function_call_meta.get(event.item_id, (None, None))
+                        yield ProviderToolArgumentsDeltaEvent(
+                            item_id=event.item_id,
+                            call_id=call_id,
+                            name=name,
+                            delta=event.delta,
+                        )
 
                 final_response = await stream.get_final_response()
         except Exception as exc:

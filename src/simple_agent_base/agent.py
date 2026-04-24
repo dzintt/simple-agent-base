@@ -266,6 +266,13 @@ class Agent:
             ):
                 if event.type in {"text_delta", "reasoning_delta"}:
                     yield AgentEvent(type=event.type, delta=event.delta)
+                elif event.type == "tool_arguments_delta":
+                    yield AgentEvent(
+                        type="tool_arguments_delta",
+                        delta=event.delta,
+                        tool_item_id=event.item_id,
+                        tool_name=event.name,
+                    )
                 elif event.type == "completed":
                     final_response = event.response
 

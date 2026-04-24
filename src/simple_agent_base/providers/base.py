@@ -34,13 +34,28 @@ class ProviderReasoningDeltaEvent(BaseModel):
     delta: str
 
 
+class ProviderToolArgumentsDeltaEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["tool_arguments_delta"] = "tool_arguments_delta"
+    item_id: str
+    call_id: str | None = None
+    name: str | None = None
+    delta: str
+
+
 class ProviderCompletedEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["completed"] = "completed"
     response: ProviderResponse
 
-ProviderEvent = ProviderTextDeltaEvent | ProviderReasoningDeltaEvent | ProviderCompletedEvent
+ProviderEvent = (
+    ProviderTextDeltaEvent
+    | ProviderReasoningDeltaEvent
+    | ProviderToolArgumentsDeltaEvent
+    | ProviderCompletedEvent
+)
 
 
 class Provider(Protocol):

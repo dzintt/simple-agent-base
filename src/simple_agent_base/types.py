@@ -264,6 +264,7 @@ class AgentEvent(BaseModel):
     type: Literal[
         "text_delta",
         "reasoning_delta",
+        "tool_arguments_delta",
         "tool_call_started",
         "tool_call_completed",
         "mcp_call_started",
@@ -272,6 +273,8 @@ class AgentEvent(BaseModel):
         "completed",
     ]
     delta: str | None = None
+    tool_item_id: str | None = None
+    tool_name: str | None = None
     tool_call: ToolCallRequest | None = None
     tool_result: ToolExecutionResult | None = None
     mcp_call: MCPCallRecord | None = None

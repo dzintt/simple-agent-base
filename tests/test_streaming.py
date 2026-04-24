@@ -15,6 +15,7 @@ from simple_agent_base.providers.base import (
     ProviderReasoningDeltaEvent,
     ProviderResponse,
     ProviderTextDeltaEvent,
+    ProviderToolArgumentsDeltaEvent,
 )
 from simple_agent_base.types import ConversationItem
 
@@ -378,6 +379,76 @@ async def test_stream_yields_tool_lifecycle_and_completed_events() -> None:
     assert events[1].tool_result.output == "pong: hello"
     assert events[-1].result is not None
     assert events[-1].result.output_text == "Done"
+
+
+@pytest.mark.asyncio
+async def test_stream_yields_tool_arguments_delta_before_tool_lifecycle() -> None:
+    provider = FakeStreamingProvider(
+        [
+            [
+                ProviderToolArgumentsDeltaEvent(
+                    item_id="fc_1",
+                    call_id="call_1",
+                    name="ping",
+                    delta='{"message":"hel',
+                ),
+                ProviderToolArgumentsDeltaEvent(
+                    item_id="fc_1",
+                    call_id="call_1",
+                    name="ping",
+                    delta='lo"}',
+                ),
+                ProviderCompletedEvent(
+                    response=ProviderResponse(
+                        response_id="resp_1",
+                        tool_calls=[
+                            {
+                                "call_id": "call_1",
+                                "name": "ping",
+                                "arguments": {"message": "hello"},
+                                "raw_arguments": '{"message":"hello"}',
+                            }
+                        ],
+                        output_items=[
+                            {
+                                "type": "function_call",
+                                "call_id": "call_1",
+                                "name": "ping",
+                                "arguments": '{"message":"hello"}',
+                            }
+                        ],
+                        raw_response={"id": "resp_1"},
+                    )
+                ),
+            ],
+            [
+                ProviderCompletedEvent(
+                    response=ProviderResponse(
+                        response_id="resp_2",
+                        output_text="Done",
+                        output_items=[],
+                        raw_response={"id": "resp_2"},
+                    )
+                ),
+            ],
+        ]
+    )
+    agent = Agent(config=AgentConfig(model="gpt-5"), tools=[ping], provider=provider)
+
+    events = [event async for event in agent.stream("Use ping.")]
+
+    assert [event.type for event in events] == [
+        "tool_arguments_delta",
+        "tool_arguments_delta",
+        "tool_call_started",
+        "tool_call_completed",
+        "completed",
+    ]
+    argument_events = [event for event in events if event.type == "tool_arguments_delta"]
+    assert events[2].tool_call is not None
+    assert "".join(event.delta or "" for event in argument_events) == events[2].tool_call.raw_arguments
+    assert [event.tool_item_id for event in argument_events] == ["fc_1", "fc_1"]
+    assert [event.tool_name for event in argument_events] == ["ping", "ping"]
 
 
 @pytest.mark.asyncio

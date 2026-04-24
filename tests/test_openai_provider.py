@@ -248,6 +248,50 @@ async def test_stream_response_emits_reasoning_delta_and_completed_summary() -> 
 
 
 @pytest.mark.asyncio
+async def test_stream_response_emits_tool_arguments_delta_events() -> None:
+    provider = make_provider()
+    final_response = FakeResponse(
+        output=[
+            FakeOutputTextItem(content=[{"type": "output_text", "text": ""}]),
+        ],
+    )
+    provider._client = FakeClient(
+        stream=FakeStream(
+            events=[
+                SimpleNamespace(
+                    type="response.output_item.added",
+                    item=SimpleNamespace(
+                        id="fc_1",
+                        type="function_call",
+                        call_id="call_1",
+                        name="search",
+                    ),
+                ),
+                SimpleNamespace(
+                    type="response.function_call_arguments.delta",
+                    item_id="fc_1",
+                    delta='{"query":"san ',
+                ),
+                SimpleNamespace(
+                    type="response.function_call_arguments.delta",
+                    item_id="fc_1",
+                    delta='francisco"}',
+                ),
+            ],
+            final_response=final_response,
+        )
+    )
+
+    events = [event async for event in provider.stream_response(input_items=[], tools=[])]
+    argument_events = [event for event in events if event.type == "tool_arguments_delta"]
+
+    assert [event.item_id for event in argument_events] == ["fc_1", "fc_1"]
+    assert [event.call_id for event in argument_events] == ["call_1", "call_1"]
+    assert [event.name for event in argument_events] == ["search", "search"]
+    assert "".join(event.delta for event in argument_events) == '{"query":"san francisco"}'
+
+
+@pytest.mark.asyncio
 async def test_stream_response_uses_done_fallback_when_no_reasoning_delta_is_seen() -> None:
     provider = make_provider(reasoning_effort="high")
     final_response = FakeResponse(

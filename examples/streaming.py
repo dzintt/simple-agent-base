@@ -27,6 +27,8 @@ async def main() -> None:
                 elif event.type == "reasoning_delta" and event.delta is not None:
                     print()
                     print(f"[reasoning] {event.delta}")
+                elif event.type == "tool_arguments_delta" and event.delta is not None:
+                    print(event.delta, end="")
                 elif event.type == "tool_call_started" and event.tool_call is not None:
                     print()
                     print(f"[tool start] {event.tool_call.name}")
