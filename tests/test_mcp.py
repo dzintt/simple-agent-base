@@ -770,6 +770,124 @@ async def test_agent_wraps_mcp_transport_errors_as_tool_failures(
         await agent.aclose()
 
 
+@pytest.mark.asyncio
+async def test_agent_times_out_slow_mcp_tool_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = FakeProvider(
+        responses=[
+            ProviderResponse(
+                response_id="resp_1",
+                tool_calls=[
+                    {
+                        "call_id": "call_1",
+                        "name": "demo__echo",
+                        "arguments": {"message": "hello"},
+                        "raw_arguments": '{"message":"hello"}',
+                    }
+                ],
+                output_items=[],
+                raw_response={"id": "resp_1"},
+            )
+        ]
+    )
+    agent = Agent(
+        config=AgentConfig(model="gpt-5", tool_timeout=0.01),
+        provider=provider,
+    )
+    fake_tool = SimpleNamespace(server_name="demo", tool_name="echo", require_approval=False)
+
+    async def fake_ready() -> None:
+        return None
+
+    async def slow_call_tool(*, namespaced_name: str, arguments: dict[str, Any]) -> Any:
+        await asyncio.sleep(0.2)
+        return (
+            fake_tool,
+            mcp_types.CallToolResult(
+                content=[mcp_types.TextContent(type="text", text="echo:hello")],
+                isError=False,
+            ),
+        )
+
+    monkeypatch.setattr(agent, "_ensure_mcp_ready", fake_ready)
+    monkeypatch.setattr(agent._mcp_manager, "has_tool", lambda name: name == "demo__echo")
+    monkeypatch.setattr(agent._mcp_manager, "get_tool", lambda name: fake_tool)
+    monkeypatch.setattr(agent._mcp_manager, "call_tool", slow_call_tool)
+
+    try:
+        with pytest.raises(
+            ToolExecutionError,
+            match="MCP tool 'echo' timed out after 0.01 seconds.",
+        ):
+            await agent.run("Use the MCP tool.")
+    finally:
+        await agent.aclose()
+
+
+@pytest.mark.asyncio
+async def test_mcp_approval_time_is_excluded_from_tool_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = FakeProvider(
+        responses=[
+            ProviderResponse(
+                response_id="resp_1",
+                tool_calls=[
+                    {
+                        "call_id": "call_1",
+                        "name": "demo__echo",
+                        "arguments": {"message": "hello"},
+                        "raw_arguments": '{"message":"hello"}',
+                    }
+                ],
+                output_items=[],
+                raw_response={"id": "resp_1"},
+            ),
+            ProviderResponse(
+                response_id="resp_2",
+                output_text="done",
+                output_items=[],
+                raw_response={"id": "resp_2"},
+            ),
+        ]
+    )
+    fake_tool = SimpleNamespace(server_name="demo", tool_name="echo", require_approval=True)
+
+    async def approve(_request: Any) -> bool:
+        await asyncio.sleep(0.05)
+        return True
+
+    agent = Agent(
+        config=AgentConfig(model="gpt-5", tool_timeout=0.01),
+        provider=provider,
+        approval_handler=approve,
+    )
+
+    async def fake_ready() -> None:
+        return None
+
+    async def quick_call_tool(*, namespaced_name: str, arguments: dict[str, Any]) -> Any:
+        return (
+            fake_tool,
+            mcp_types.CallToolResult(
+                content=[mcp_types.TextContent(type="text", text="echo:hello")],
+                isError=False,
+            ),
+        )
+
+    monkeypatch.setattr(agent, "_ensure_mcp_ready", fake_ready)
+    monkeypatch.setattr(agent._mcp_manager, "has_tool", lambda name: name == "demo__echo")
+    monkeypatch.setattr(agent._mcp_manager, "get_tool", lambda name: fake_tool)
+    monkeypatch.setattr(agent._mcp_manager, "call_tool", quick_call_tool)
+
+    try:
+        result = await agent.run("Use the MCP tool.")
+    finally:
+        await agent.aclose()
+
+    assert result.output_text == "done"
+    assert result.tool_results[0].output == "echo:hello"
+
+
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))

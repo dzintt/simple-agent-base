@@ -152,6 +152,17 @@ agent = Agent(
 
 Only enable it for independent tools.
 
+Set `tool_timeout` when each local or MCP tool call should have a maximum runtime:
+
+```python
+agent = Agent(
+    config=AgentConfig(model="gpt-5.4", tool_timeout=30.0),
+    tools=[lookup_user],
+)
+```
+
+Timeouts raise `ToolExecutionError`. For sync tools, the timeout stops waiting for the result, but Python cannot forcibly stop the worker thread.
+
 ## Streaming
 
 ```python
@@ -287,6 +298,7 @@ AgentConfig(
     reasoning_effort=None,
     temperature=None,
     timeout=None,
+    tool_timeout=None,
 )
 ```
 

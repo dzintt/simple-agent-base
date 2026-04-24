@@ -80,6 +80,13 @@ async def slow_ping(message: str) -> str:
 
 
 @tool
+async def very_slow_ping(message: str) -> str:
+    """Echo a message back after a longer delay."""
+    await asyncio.sleep(0.2)
+    return f"pong: {message}"
+
+
+@tool
 async def explode(message: str) -> str:
     """Always fail."""
     raise ValueError(message)
@@ -292,6 +299,46 @@ async def test_stream_yields_tool_lifecycle_and_completed_events() -> None:
     assert events[-1].result.output_text == "Done"
 
 
+@pytest.mark.asyncio
+async def test_stream_tool_timeout_raises_after_started_event() -> None:
+    provider = FakeStreamingProvider(
+        [
+            [
+                ProviderCompletedEvent(
+                    response=ProviderResponse(
+                        response_id="resp_1",
+                        tool_calls=[
+                            {
+                                "call_id": "call_1",
+                                "name": "very_slow_ping",
+                                "arguments": {"message": "hello"},
+                                "raw_arguments": '{"message":"hello"}',
+                            }
+                        ],
+                        output_items=[],
+                        raw_response={"id": "resp_1"},
+                    )
+                )
+            ]
+        ]
+    )
+    agent = Agent(
+        config=AgentConfig(model="gpt-5", tool_timeout=0.01),
+        tools=[very_slow_ping],
+        provider=provider,
+    )
+    events = []
+
+    with pytest.raises(
+        ToolExecutionError,
+        match="Tool 'very_slow_ping' timed out after 0.01 seconds.",
+    ):
+        async for event in agent.stream("Use the slow tool."):
+            events.append(event)
+
+    assert [event.type for event in events] == ["tool_call_started"]
+
+
 def test_stream_sync_preserves_tool_lifecycle_events() -> None:
     provider = FakeStreamingProvider(
         [
@@ -335,6 +382,41 @@ def test_stream_sync_preserves_tool_lifecycle_events() -> None:
     ]
     assert events[1].tool_result is not None
     assert events[1].tool_result.output == "pong: hello"
+
+
+def test_stream_sync_tool_timeout_raises() -> None:
+    provider = FakeStreamingProvider(
+        [
+            [
+                ProviderCompletedEvent(
+                    response=ProviderResponse(
+                        response_id="resp_1",
+                        tool_calls=[
+                            {
+                                "call_id": "call_1",
+                                "name": "very_slow_ping",
+                                "arguments": {"message": "hello"},
+                                "raw_arguments": '{"message":"hello"}',
+                            }
+                        ],
+                        output_items=[],
+                        raw_response={"id": "resp_1"},
+                    )
+                )
+            ]
+        ]
+    )
+    agent = Agent(
+        config=AgentConfig(model="gpt-5", tool_timeout=0.01),
+        tools=[very_slow_ping],
+        provider=provider,
+    )
+
+    with pytest.raises(
+        ToolExecutionError,
+        match="Tool 'very_slow_ping' timed out after 0.01 seconds.",
+    ):
+        list(agent.stream_sync("Use the slow tool."))
 
 
 def test_stream_sync_after_run_sync_reuses_the_same_agent_cleanly() -> None:
@@ -761,5 +843,3 @@ async def test_stream_parallel_tool_failure_raises() -> None:
 
     with pytest.raises(ToolExecutionError, match="boom"):
         [event async for event in agent.stream("Fail with parallel tools.")]
-
-

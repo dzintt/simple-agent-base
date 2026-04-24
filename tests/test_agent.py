@@ -80,8 +80,22 @@ async def slow_ping(message: str) -> str:
 
 
 @tool
+async def very_slow_ping(message: str) -> str:
+    """Echo a message back after a longer delay."""
+    await asyncio.sleep(0.2)
+    return f"pong: {message}"
+
+
+@tool
 def sync_ping(message: str) -> str:
     """Echo a message back synchronously."""
+    return f"sync-pong: {message}"
+
+
+@tool
+def very_slow_sync_ping(message: str) -> str:
+    """Echo a message back synchronously after a longer delay."""
+    time.sleep(0.2)
     return f"sync-pong: {message}"
 
 
@@ -1016,6 +1030,142 @@ async def test_parallel_tool_batch_remains_sequential_by_default() -> None:
     assert result.output_text == "done"
     assert [tool_result.output for tool_result in result.tool_results] == ["pong: alpha", "pong: beta"]
     assert elapsed >= 0.09
+
+
+@pytest.mark.asyncio
+async def test_tool_timeout_raises_for_slow_async_tool() -> None:
+    provider = FakeProvider(
+        [
+            ProviderResponse(
+                response_id="resp_1",
+                tool_calls=[
+                    {
+                        "call_id": "call_1",
+                        "name": "very_slow_ping",
+                        "arguments": {"message": "hello"},
+                        "raw_arguments": '{"message":"hello"}',
+                    }
+                ],
+                output_items=[],
+                raw_response={"id": "resp_1"},
+            )
+        ]
+    )
+    agent = Agent(
+        config=AgentConfig(model="gpt-5", tool_timeout=0.01),
+        tools=[very_slow_ping],
+        provider=provider,
+    )
+
+    with pytest.raises(
+        ToolExecutionError,
+        match="Tool 'very_slow_ping' timed out after 0.01 seconds.",
+    ):
+        await agent.run("Use the slow tool.")
+
+
+@pytest.mark.asyncio
+async def test_no_tool_timeout_preserves_slow_async_tool_behavior() -> None:
+    provider = FakeProvider(
+        [
+            ProviderResponse(
+                response_id="resp_1",
+                tool_calls=[
+                    {
+                        "call_id": "call_1",
+                        "name": "slow_ping",
+                        "arguments": {"message": "hello"},
+                        "raw_arguments": '{"message":"hello"}',
+                    }
+                ],
+                output_items=[],
+                raw_response={"id": "resp_1"},
+            ),
+            ProviderResponse(
+                response_id="resp_2",
+                output_text="done",
+                output_items=[],
+                raw_response={"id": "resp_2"},
+            ),
+        ]
+    )
+    agent = Agent(
+        config=AgentConfig(model="gpt-5", tool_timeout=None),
+        tools=[slow_ping],
+        provider=provider,
+    )
+
+    result = await agent.run("Use the slow tool.")
+
+    assert result.output_text == "done"
+    assert result.tool_results[0].output == "pong: hello"
+
+
+@pytest.mark.asyncio
+async def test_tool_timeout_raises_for_slow_sync_tool() -> None:
+    provider = FakeProvider(
+        [
+            ProviderResponse(
+                response_id="resp_1",
+                tool_calls=[
+                    {
+                        "call_id": "call_1",
+                        "name": "very_slow_sync_ping",
+                        "arguments": {"message": "hello"},
+                        "raw_arguments": '{"message":"hello"}',
+                    }
+                ],
+                output_items=[],
+                raw_response={"id": "resp_1"},
+            )
+        ]
+    )
+    agent = Agent(
+        config=AgentConfig(model="gpt-5", tool_timeout=0.01),
+        tools=[very_slow_sync_ping],
+        provider=provider,
+    )
+
+    with pytest.raises(
+        ToolExecutionError,
+        match="Tool 'very_slow_sync_ping' timed out after 0.01 seconds.",
+    ):
+        await agent.run("Use the slow sync tool.")
+
+
+@pytest.mark.asyncio
+async def test_parallel_tool_batch_timeout_fails_run() -> None:
+    provider = FakeProvider(
+        [
+            ProviderResponse(
+                response_id="resp_1",
+                tool_calls=[
+                    {
+                        "call_id": "call_1",
+                        "name": "very_slow_ping",
+                        "arguments": {"message": "alpha"},
+                        "raw_arguments": '{"message":"alpha"}',
+                    },
+                    {
+                        "call_id": "call_2",
+                        "name": "slow_ping",
+                        "arguments": {"message": "beta"},
+                        "raw_arguments": '{"message":"beta"}',
+                    },
+                ],
+                output_items=[],
+                raw_response={"id": "resp_1"},
+            )
+        ]
+    )
+    agent = Agent(
+        config=AgentConfig(model="gpt-5", parallel_tool_calls=True, tool_timeout=0.01),
+        tools=[very_slow_ping, slow_ping],
+        provider=provider,
+    )
+
+    with pytest.raises(ToolExecutionError, match="Tool 'very_slow_ping' timed out"):
+        await agent.run("Use the slow tools.")
 
 
 @pytest.mark.asyncio

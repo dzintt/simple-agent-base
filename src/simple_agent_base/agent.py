@@ -296,7 +296,12 @@ class Agent:
     ) -> _ExecutedCall:
         if self._mcp_manager.has_tool(call.name):
             return await self._execute_mcp_tool(call, skip_approval=skip_mcp_approval)
-        return _ExecutedCall(tool_result=await self.registry.execute(call))
+        return _ExecutedCall(
+            tool_result=await self._with_tool_timeout(
+                self.registry.execute(call),
+                timeout_message=f"Tool '{call.name}' timed out after {self.config.tool_timeout} seconds.",
+            )
+        )
 
     async def _execute_tool_batch(
         self,
@@ -427,12 +432,24 @@ class Agent:
         if not approved:
             return self._build_denied_mcp_call(tool, call)
 
-        try:
-            tool, raw_result = await self._mcp_manager.call_tool(
+        async def call_mcp() -> tuple[MCPToolDefinition, object, str]:
+            called_tool, raw_result = await self._mcp_manager.call_tool(
                 namespaced_name=call.name,
                 arguments=call.arguments,
             )
             output = normalize_mcp_tool_result(raw_result)
+            return called_tool, raw_result, output
+
+        try:
+            tool, raw_result, output = await self._with_tool_timeout(
+                call_mcp(),
+                timeout_message=(
+                    f"MCP tool '{tool.tool_name}' timed out after "
+                    f"{self.config.tool_timeout} seconds."
+                ),
+            )
+        except ToolExecutionError:
+            raise
         except Exception as exc:
             raise ToolExecutionError(f"MCP tool '{tool.tool_name}' failed: {exc}") from exc
 
@@ -455,6 +472,20 @@ class Agent:
                 output=output,
             ),
         )
+
+    async def _with_tool_timeout(
+        self,
+        awaitable: Awaitable[T],
+        *,
+        timeout_message: str,
+    ) -> T:
+        if self.config.tool_timeout is None:
+            return await awaitable
+
+        try:
+            return await asyncio.wait_for(awaitable, timeout=self.config.tool_timeout)
+        except TimeoutError as exc:
+            raise ToolExecutionError(timeout_message) from exc
 
     def _prepare_tool_call_for_stream(
         self,
