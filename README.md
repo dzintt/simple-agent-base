@@ -1,86 +1,49 @@
 # Simple Agent Base
 
-Small async-first Python package for building OpenAI-powered agents on top of the Responses API.
+`simple-agent-base` is a small async-first Python package for building OpenAI Responses API agents.
 
-This project gives you a thin layer over the OpenAI Python SDK for the parts that repeat in most agent projects:
+It gives you the pieces most small agent projects need: a request/tool loop, local Python tools, structured outputs, streaming events, chat history, image and file input, MCP tool bridging, and sync wrappers.
 
-- request/response loops
-- local tool registration and execution
-- structured outputs with Pydantic
-- streaming text and tool events
-- in-memory chat history
-- snapshot and restore
-- image and file inputs
-- sync wrappers for non-async code
+It is intentionally not a full agent framework. It does not include planning, retrieval, memory systems, workflow orchestration, or multi-agent primitives.
 
-It does not try to be a full agent framework. It does not add planning, memory systems, retrieval, workflow orchestration, or hosted tools.
+## Quick Start
 
-## What This Project Is For
+Requirements:
 
-Use this package when you want:
+- Python `3.12+`
+- An OpenAI API key
+- `uv` or `pip`
 
-- a small OpenAI-specific harness instead of a large framework
-- code you can read and own end-to-end
-- local Python tools with automatic JSON schema generation
-- one-shot runs, streaming, and chat sessions through one API
-- structured outputs without writing the tool loop yourself
+### 1. Install
 
-Use something else when you want:
-
-- multi-agent orchestration
-- long-running workflows or state machines
-- retrieval, vector storage, or memory layers
-- provider-agnostic abstractions
-
-The main idea is simple: this package sits between the raw OpenAI SDK and a full framework.
-
-## Install
-
-Right now the package installs from GitHub or a local checkout.
-
-Install from GitHub with `pip`:
-
-```bash
-python -m pip install "git+https://github.com/dzintt/simple-agent-base.git"
-```
-
-Install from GitHub with `uv`:
+From GitHub:
 
 ```bash
 uv add "git+https://github.com/dzintt/simple-agent-base.git"
 ```
 
-Install from a local checkout with `pip`:
-
-```bash
-python -m pip install .
-```
-
-Install from a local checkout with `uv`:
+Or from a local checkout:
 
 ```bash
 uv sync
 ```
 
-Install development dependencies:
+With `pip`:
 
 ```bash
-uv sync --dev
+python -m pip install "git+https://github.com/dzintt/simple-agent-base.git"
 ```
 
-Set your API key:
+### 2. Configure
 
 ```bash
-$env:OPENAI_API_KEY="your_key_here"
+export OPENAI_API_KEY="your-key"
+export OPENAI_MODEL="gpt-5.4"
 ```
 
-You can also set the model through the environment:
+You can also pass `model` directly through `AgentConfig`.
 
-```bash
-$env:OPENAI_MODEL="gpt-5.4"
-```
-
-## Quickstart
+### 3. Run an agent
 
 ```python
 import asyncio
@@ -98,13 +61,12 @@ async def main() -> None:
     agent = Agent(
         config=AgentConfig(model="gpt-5.4"),
         tools=[ping],
-        system_prompt="You are concise and helpful.",
+        system_prompt="You are concise.",
     )
 
     try:
         result = await agent.run("Call ping with hello and tell me the result.")
         print(result.output_text)
-        print(result.tool_results)
     finally:
         await agent.aclose()
 
@@ -112,265 +74,106 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-`agent.run(...)` returns an `AgentRunResult`:
+## Core API
 
-- `output_text`: final assistant text
-- `reasoning_summary`: final reasoning summary when reasoning is enabled and the backend returns one
-- `output_data`: parsed Pydantic object when you pass `response_model=...`
-- `tool_results`: local tool results from the run
-- `response_id`: provider response id when available
-- `raw_responses`: raw provider payloads for debugging
-
-## The API Surface
-
-Most projects only need these exports:
+Most projects use these exports:
 
 - `Agent`
 - `AgentConfig`
 - `ChatSession`
 - `ChatMessage`
-- `TextPart`
-- `ImagePart`
-- `FilePart`
-- `ChatSnapshot`
+- `TextPart`, `ImagePart`, `FilePart`
 - `ToolRegistry`
 - `tool`
 - `MCPServer`
-- `MCPApprovalRequest`
-- `MCPCallRecord`
+
+Common calls:
+
+```python
+result = await agent.run("Say hello.")
+
+async for event in agent.stream("Explain async IO."):
+    ...
+
+chat = agent.chat(system_prompt="Be brief.")
+await chat.run("My name is Anson.")
+await chat.run("What is my name?")
+```
+
+`AgentRunResult` includes:
+
+- `output_text`
+- `output_data` for structured output
+- `tool_results`
+- `mcp_calls`
+- `reasoning_summary`
+- `response_id`
+- `raw_responses`
 
 ## How It Works
 
-The runtime model is small:
+1. `Agent.run(...)` or `Agent.stream(...)` receives a string or message list.
+2. The input is converted to Responses API items.
+3. A convenience `system_prompt` is sent as a `developer` message.
+4. The OpenAI provider sends the request.
+5. If the model returns tool calls, local or MCP tools run and their outputs are appended.
+6. The loop repeats until the model returns a final response or `max_turns` is reached.
 
-1. You call `Agent.run(...)` or `Agent.stream(...)` with a string or a list of messages.
-2. The package normalizes that input into Responses API items.
-3. If you passed `system_prompt`, it prepends that prompt as a `developer` message.
-4. The provider sends the request to the OpenAI Responses API.
-5. If the model returns tool calls, the package executes the local tools and appends their outputs to the transcript.
-6. The loop repeats until the model returns a final answer or `max_turns` is reached.
+## Tools
 
-`Agent` owns the loop. `ChatSession` owns in-memory conversation state. `ToolRegistry` owns tool schemas and execution.
-
-## Common Tasks
-
-### One Request
-
-Use `run(...)` for a normal one-shot request:
-
-```python
-result = await agent.run("Say hello in one sentence.")
-print(result.output_text)
-```
-
-### Streaming
-
-Use `stream(...)` when you want incremental text or tool lifecycle events:
-
-```python
-async for event in agent.stream("Explain async IO in one sentence."):
-    if event.type == "text_delta" and event.delta:
-        print(event.delta, end="")
-    elif event.type == "reasoning_delta" and event.delta:
-        print(f"[reasoning] {event.delta}")
-    elif event.type == "completed" and event.result is not None:
-        print()
-        print(event.result.output_text)
-        print(event.result.reasoning_summary)
-```
-
-Streaming event types:
-
-- `text_delta`
-- `reasoning_delta`
-- `tool_call_started`
-- `tool_call_completed`
-- `completed`
-
-### Reasoning
-
-Enable reasoning through `AgentConfig.reasoning_effort`:
-
-```python
-agent = Agent(
-    config=AgentConfig(
-        model="gpt-5.4",
-        reasoning_effort="high",
-    )
-)
-```
-
-When reasoning is enabled:
-
-- the provider sends `reasoning={"effort": ..., "summary": "auto"}`
-- streamed reasoning summaries arrive as `reasoning_delta` events
-- the final `AgentRunResult` may include `reasoning_summary`
-
-### Tools
-
-Define tools with `@tool`:
+Use `@tool` on async or sync Python functions:
 
 ```python
 from simple_agent_base import tool
 
 
 @tool
-async def lookup_user(user_id: int) -> str:
-    """Return a serialized user record."""
+def lookup_user(user_id: int) -> str:
+    """Fetch a user record."""
     return '{"id": 1, "name": "Ada"}'
 ```
 
-Register them on the agent:
-
-```python
-agent = Agent(
-    config=AgentConfig(model="gpt-5.4"),
-    tools=[lookup_user],
-)
-```
-
-Tool rules:
-
-- tools can be `async def` or normal `def`
-- every parameter needs a type annotation
-- `*args` and `**kwargs` are not allowed
-- the tool description comes from the first docstring line unless you override it
-- sync tools run in a worker thread
-- tool outputs are serialized to strings before the package sends them back to the model
-
-You can override the tool name and description:
+Tool parameters must have type annotations. `*args` and `**kwargs` are rejected. The first docstring line becomes the tool description unless you override it:
 
 ```python
 @tool(name="lookup_user", description="Fetch a user record.")
-async def get_user(user_id: int) -> str:
+def get_user(user_id: int) -> str:
     return '{"id": 1, "name": "Ada"}'
 ```
 
-### Parallel Tool Calls
-
-Tool execution is sequential by default.
-
-Enable same-turn parallel execution only when your tools are independent:
+Parallel same-turn tool execution is opt-in:
 
 ```python
 agent = Agent(
-    config=AgentConfig(
-        model="gpt-5.4",
-        parallel_tool_calls=True,
-    ),
+    config=AgentConfig(model="gpt-5.4", parallel_tool_calls=True),
     tools=[get_weather, get_news],
 )
 ```
 
-When enabled:
+Only enable it for independent tools.
 
-- the package sends `parallel_tool_calls=True` to the Responses API
-- if the model returns multiple tool calls in one turn, the package executes them concurrently
-- tool results keep the model's original call order
-
-Good fits:
-
-- independent API calls
-- read-only database queries
-- weather, news, and market lookups in one turn
-
-Bad fits:
-
-- create invoice, then email invoice
-- checkout, then send receipt
-- anything that depends on ordering or shared mutable state
-
-### MCP Servers
-
-Give the model access to a client-side MCP server by passing `mcp_servers` to the agent:
+## Streaming
 
 ```python
-import sys
-from pathlib import Path
-
-from simple_agent_base import Agent, AgentConfig, MCPServer
-
-fixture_server = Path("tests/fixtures/mcp_demo_server.py").resolve()
-
-agent = Agent(
-    config=AgentConfig(model="gpt-5.4"),
-    mcp_servers=[
-        MCPServer.stdio(
-            name="demo",
-            command=sys.executable,
-            args=[str(fixture_server), "stdio"],
-            require_approval=False,
-        )
-    ],
-)
-
-result = await agent.run("Use the demo MCP echo tool with the message 'hello'.")
-print(result.output_text)
-for call in result.mcp_calls:
-    print(call.server_name, call.name, call.arguments)
+async for event in agent.stream("Explain async IO in one sentence."):
+    if event.type == "text_delta":
+        print(event.delta, end="")
+    elif event.type == "completed":
+        print(event.result.output_text)
 ```
 
-This package supports client-side MCP only. The library owns the MCP connection, discovers tools locally, exposes them to the model as function tools, executes the chosen MCP call locally, and records the activity in `result.mcp_calls`.
+Event types include:
 
-`MCPServer` fields:
-
-- `name`: required server identifier used to namespace discovered tools
-- `allowed_tools`: optional list of MCP tool names to expose
-- `require_approval`: if `True`, the local `approval_handler` is invoked before each MCP call
-- `MCPServer.stdio(...)`: configure a subprocess-backed MCP server
-- `MCPServer.http(...)`: configure a streamable HTTP MCP server
-
-For trusted public or read-only servers, set `require_approval=False` to skip approval plumbing:
-
-```python
-import sys
-from pathlib import Path
-
-fixture_server = Path("tests/fixtures/mcp_demo_server.py").resolve()
-
-agent = Agent(
-    config=AgentConfig(model="gpt-5.4"),
-    mcp_servers=[
-        MCPServer.stdio(
-            name="demo",
-            command=sys.executable,
-            args=[str(fixture_server), "stdio"],
-            require_approval=False,
-        )
-    ],
-)
-```
-
-To gate tools, set `require_approval=True` and pass an `approval_handler`:
-
-```python
-from simple_agent_base import MCPApprovalRequest
-
-def approve(request: MCPApprovalRequest) -> bool:
-    return input(f"Run {request.server_name}.{request.name}? [y/N] ").lower() == "y"
-
-agent = Agent(
-    config=AgentConfig(model="gpt-5.4"),
-    mcp_servers=[
-        MCPServer.http(
-            name="gh",
-            url="http://127.0.0.1:8000/mcp",
-            require_approval=True,
-        )
-    ],
-    approval_handler=approve,
-)
-```
-
-The handler can be sync or async. If approvals are requested and no handler is set, the package raises `MCPApprovalRequiredError`.
-
-Streaming surfaces three new event types alongside the existing ones:
-
+- `text_delta`
+- `reasoning_delta`
+- `tool_call_started`
+- `tool_call_completed`
+- `mcp_approval_requested`
 - `mcp_call_started`
 - `mcp_call_completed`
-- `mcp_approval_requested`
+- `completed`
 
-### Structured Output
+## Structured Output
 
 Pass a Pydantic model as `response_model`:
 
@@ -393,45 +196,36 @@ print(result.output_data)
 
 Structured output works with normal runs, streaming, and tool calls.
 
-### Chat Sessions
+## Chat Sessions
 
-Use a chat session when you want the package to keep history in memory:
+`ChatSession` keeps in-memory history:
 
 ```python
 chat = agent.chat(system_prompt="You are concise.")
 
 await chat.run("My name is Anson.")
-result = await chat.run("What's my name?")
+result = await chat.run("What is my name?")
 
 print(result.output_text)
 print(chat.history)
 ```
 
-`chat.history` returns `ChatMessage` values for display or storage.
-
-### Snapshot And Restore
-
-Use snapshots when you need exact resumable chat state:
+Snapshots can be stored and restored:
 
 ```python
-chat = agent.chat(system_prompt="You are concise.")
-
-await chat.run("My name is Anson.")
-await chat.run("My favorite color is teal.")
-
-snapshot = chat.snapshot()
 payload = chat.export()
 restored = agent.chat_from_snapshot(payload)
 ```
 
-Snapshots restore conversation items plus the chat session `system_prompt`. They do not restore model config, tools, or provider settings.
+Snapshots include conversation items and the chat-level `system_prompt`. They do not include model config, tools, or provider settings.
 
-### Images And Files
+## Images and Files
 
-Use explicit content parts for multimodal input:
+Use content parts when a message needs more than plain text:
 
 ```python
 from simple_agent_base import ChatMessage, ImagePart, TextPart
+
 
 result = await agent.run(
     [
@@ -439,156 +233,49 @@ result = await agent.run(
             role="user",
             content=[
                 TextPart("Describe this image."),
-                ImagePart.from_url("https://example.com/cat.png"),
+                ImagePart.from_file("cat.png"),
             ],
         )
     ]
 )
 ```
 
-Local images:
+Use `FilePart.from_file(...)` for local documents or `from_url(...)` for hosted files. Local helpers convert files to Base64 data URLs; they do not use the OpenAI Files API.
+
+## MCP Tools
+
+Client-side MCP servers can be exposed to the model as function tools:
 
 ```python
-ImagePart.from_file("cat.png")
-```
+import sys
+from pathlib import Path
 
-Supported local image formats:
+from simple_agent_base import Agent, AgentConfig, MCPServer
 
-- PNG
-- JPEG
-- WEBP
-- GIF
 
-File input uses the same shape:
+server_path = Path("tests/fixtures/mcp_demo_server.py").resolve()
 
-```python
-from simple_agent_base import ChatMessage, FilePart, TextPart
-
-result = await agent.run(
-    [
-        ChatMessage(
-            role="user",
-            content=[
-                TextPart("Summarize this PDF."),
-                FilePart.from_file("report.pdf"),
-            ],
-        )
-    ]
-)
-```
-
-Common supported file types:
-
-- PDF
-- TXT
-- CSV and TSV
-- JSON
-- HTML, XML, YAML, Markdown
-- DOC and DOCX
-- XLS and XLSX
-- PPT and PPTX
-- RTF
-- ODT
-
-`ImagePart.from_file(...)` and `FilePart.from_file(...)` read local files and convert them to Base64 data URLs. This helper does not use the OpenAI Files API.
-
-### Sync Usage
-
-The package is async-first. Use the sync wrappers only in synchronous programs.
-
-```python
-agent = Agent(config=AgentConfig(model="gpt-5.4"))
-
-try:
-    result = agent.run_sync("Say hello.")
-    print(result.output_text)
-finally:
-    agent.close()
-```
-
-For sync streaming:
-
-```python
-for event in agent.stream_sync("Explain async IO in one sentence."):
-    if event.type == "text_delta" and event.delta:
-        print(event.delta, end="")
-```
-
-`run_sync()` and `stream_sync()` cannot run inside an existing event loop.
-
-## Message Model
-
-Use a plain string for text-only requests:
-
-```python
-result = await agent.run("Hello")
-```
-
-Use explicit messages when you already have history or need multimodal content:
-
-```python
-from simple_agent_base import ChatMessage
-
-messages = [
-    ChatMessage(role="user", content="My name is Anson."),
-    ChatMessage(role="assistant", content="Noted."),
-    ChatMessage(role="user", content="What's my name?"),
-]
-
-result = await agent.run(messages)
-```
-
-`ChatMessage.role` can be:
-
-- `user`
-- `assistant`
-- `developer`
-- `system`
-
-Content parts:
-
-- `TextPart("...")`
-- `ImagePart.from_url(...)`
-- `ImagePart.from_file(...)`
-- `FilePart.from_url(...)`
-- `FilePart.from_file(...)`
-
-## System Prompts
-
-You can set a default prompt on the agent:
-
-```python
 agent = Agent(
     config=AgentConfig(model="gpt-5.4"),
-    system_prompt="You are concise and helpful.",
+    mcp_servers=[
+        MCPServer.stdio(
+            name="demo",
+            command=sys.executable,
+            args=[str(server_path), "stdio"],
+            require_approval=False,
+        )
+    ],
 )
 ```
 
-Override it for one call:
+Discovered MCP tools are namespaced as `server__tool`. Use `allowed_tools` to expose only specific tools, and set `require_approval=True` with an `approval_handler` when calls need local confirmation.
 
-```python
-result = await agent.run(
-    "Explain async IO.",
-    system_prompt="You are a patient teacher.",
-)
-```
+Supported transports:
 
-Set a default prompt for a chat session:
-
-```python
-chat = agent.chat(system_prompt="You are a terse coding assistant.")
-```
-
-Important behavior:
-
-- the convenience `system_prompt` is sent as a `developer` message
-- if you also pass explicit `system` or `developer` messages, the package sends both
-- `chat.history` does not include the convenience prompt
-- chat snapshots store the session `system_prompt` separately, not as a persisted message
+- `MCPServer.stdio(...)`
+- `MCPServer.http(...)`
 
 ## Configuration
-
-`AgentConfig` fields:
 
 ```python
 AgentConfig(
@@ -610,85 +297,58 @@ Environment variables:
 - `OPENAI_BASE_URL`
 - `OPENAI_REASONING_EFFORT`
 
-Notes:
+## Sync Usage
 
-- `model` is required unless `OPENAI_MODEL` is set
-- `api_key` defaults from `OPENAI_API_KEY`
-- `base_url` lets you target an OpenAI-compatible endpoint
-- `max_turns` limits tool-call loops before the package raises `MaxTurnsExceededError`
+The package is async-first, but synchronous programs can use:
 
-## Error Handling
+```python
+agent = Agent(config=AgentConfig(model="gpt-5.4"))
 
-`run()` and `run_sync()` raise exceptions such as:
-
-- `ProviderError`
-- `ToolExecutionError`
-- `MaxTurnsExceededError`
-
-`stream()` and `stream_sync()` also raise these exceptions. They do not convert failures into an `error` event.
-
-## Examples
-
-See [examples/README.md](examples/README.md) for a guided list.
-
-Start with these:
-
-1. [basic_agent.py](examples/basic_agent.py)
-2. [structured_output.py](examples/structured_output.py)
-3. [streaming.py](examples/streaming.py)
-4. [chat_session.py](examples/chat_session.py)
-5. [parallel_tools.py](examples/parallel_tools.py)
-
-Other examples:
-
-- [sync_agent.py](examples/sync_agent.py)
-- [sync_streaming.py](examples/sync_streaming.py)
-- [chat_persistence.py](examples/chat_persistence.py)
-- [system_prompt.py](examples/system_prompt.py)
-- [image_input.py](examples/image_input.py)
-- [file_input.py](examples/file_input.py)
-- [chat_with_images.py](examples/chat_with_images.py)
-- [structured_with_tools.py](examples/structured_with_tools.py)
-
-## Project Layout
-
-```text
-simple-agent-base/
-|-- src/
-|   `-- simple_agent_base/
-|       |-- __init__.py
-|       |-- agent.py
-|       |-- chat.py
-|       |-- config.py
-|       |-- errors.py
-|       |-- sync_utils.py
-|       |-- types.py
-|       |-- providers/
-|       |   |-- base.py
-|       |   `-- openai.py
-|       `-- tools/
-|           |-- base.py
-|           |-- decorators.py
-|           `-- registry.py
-|-- examples/
-|-- scripts/
-|-- tests/
-|-- pyproject.toml
-`-- README.md
+try:
+    result = agent.run_sync("Say hello.")
+    print(result.output_text)
+finally:
+    agent.close()
 ```
+
+Do not call `run_sync()` or `stream_sync()` from inside an existing event loop.
+
+## Examples and Docs
+
+Start with:
+
+- [examples/basic_agent.py](examples/basic_agent.py)
+- [examples/structured_output.py](examples/structured_output.py)
+- [examples/streaming.py](examples/streaming.py)
+- [examples/chat_session.py](examples/chat_session.py)
+- [examples/mcp_server.py](examples/mcp_server.py)
+
+More details:
+
+- [docs/usage.md](docs/usage.md)
+- [docs/tools.md](docs/tools.md)
+- [docs/structured-output.md](docs/structured-output.md)
+- [docs/architecture.md](docs/architecture.md)
+- [docs/development.md](docs/development.md)
 
 ## Development
 
-Run the test suite:
+Install development dependencies:
+
+```bash
+uv sync --dev
+```
+
+Run tests:
 
 ```bash
 uv run pytest
 ```
 
-Run the live end-to-end script when you want to verify the real provider path with an API key:
+Run the live provider check:
 
 ```bash
 uv run python scripts/live_e2e_test.py
 ```
 
-The unit tests run without a real API key. The live script does not.
+Unit tests do not require an API key. The live script does.
