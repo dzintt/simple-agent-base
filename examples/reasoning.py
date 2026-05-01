@@ -6,7 +6,7 @@ from simple_agent_base import Agent, AgentConfig
 async def main() -> None:
     async with Agent(
         config=AgentConfig(
-            model="gpt-5.4",
+            model="gpt-5.5",
             reasoning_effort="high",
         )
     ) as agent:

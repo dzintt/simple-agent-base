@@ -23,7 +23,7 @@ async def get_weather(city: str) -> str:
 
 async def main() -> None:
     async with Agent(
-        config=AgentConfig(model="gpt-5.4"),
+        config=AgentConfig(model="gpt-5.5"),
         tools=[get_weather],
     ) as agent:
         result = await agent.run(

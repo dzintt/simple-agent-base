@@ -13,7 +13,7 @@ class Summary(BaseModel):
 async def main() -> None:
     async with Agent(
         config=AgentConfig(
-            model="gpt-5.4",
+            model="gpt-5.5",
             reasoning_effort="high",
         )
     ) as agent:
