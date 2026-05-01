@@ -1,78 +1,83 @@
 ---
 name: simple-agent-base
-description: Use when working in this repository or when writing code that uses the simple_agent_base package. Covers the package mental model, the correct public APIs, tool registration rules, chat/session behavior, structured output, streaming, multimodal inputs, sync wrappers, cleanup, and the source files to inspect when changing behavior.
+description: 'Use this skill whenever the user wants to build, debug, review, or modify Python code that uses `simple_agent_base` or the `simple-agent-base` GitHub package. This skill is the shortcut context for dzintt/simple-agent-base: Agent, AgentConfig, tools, hosted tools, MCP servers, streaming, structured output, chat snapshots, multimodal inputs, sync wrappers, custom providers, tests, and common mistakes. Prefer this skill before researching the repo or guessing the API, even if the user only says "agent harness", "simple agent base", "Responses API agent", or points at `C:\Users\Anson\Desktop\agent-harness-base`.'
 ---
 
 # Simple Agent Base
 
-Use this skill whenever you need to write code against `simple_agent_base` or modify the package itself.
+Use this skill to write correct code against `simple_agent_base` without re-discovering the library. It is based on the local repo at `C:\Users\Anson\Desktop\agent-harness-base`.
 
-Do not re-derive the package API from scratch. Use the patterns in this skill first. Only read the deeper docs if the task depends on exact edge-case behavior.
+If you need exact edge-case behavior, read `references/api-notes.md`. If you need ready-to-adapt snippets, read `references/examples.md`.
 
-## What This Package Is
+## Core Mental Model
 
-`simple_agent_base` is a small async-first harness over the OpenAI Responses API.
+`simple_agent_base` is a small async-first Python harness for the OpenAI Responses API. It gives you a request loop, local Python tools, hosted tool passthrough, client-side MCP tool bridging, streaming events, structured output, in-memory chat state, multimodal message parts, sync wrappers, and a minimal provider interface.
 
-It provides:
+It is not a full agent framework. Do not assume it has planning, durable memory, retrieval, workflow orchestration, retries, dependency-aware tool scheduling, or multi-agent primitives unless the caller asks you to build those on top.
 
-- one-shot runs with `Agent.run(...)`
-- streaming with `Agent.stream(...)`
-- local Python tools with automatic JSON schema generation
-- structured outputs with `response_model=...`
-- in-memory chat sessions with `agent.chat()`
-- snapshot and restore with `chat.snapshot()` and `agent.chat_from_snapshot(...)`
-- image and file inputs through `ChatMessage` content parts
-- sync wrappers for non-async programs
+## First Choice Rules
 
-It is not a full agent framework. Do not invent concepts like planning, memory systems, approval flows, hosted tools, retrieval, or workflow orchestration unless the user explicitly wants to build them on top.
+- Use `Agent` plus `AgentConfig`; do not invent a wrapper unless the surrounding project already has one.
+- Set `system_prompt` when the agent needs durable role, behavior, style, safety, or tool-use instructions. Do not bury those instructions only in the user prompt.
+- Prefer async APIs: `await agent.run(...)` and `async for event in agent.stream(...)`.
+- Use `async with Agent(...) as agent:` for cleanup when possible.
+- Use `@tool` for local Python functions rather than hand-writing tool schemas.
+- Use `response_model=MyPydanticModel` when the caller needs typed application data.
+- Use `agent.chat()` for multi-turn state; use `chat.export()` and `agent.chat_from_snapshot(...)` for persistence.
+- Use `ChatMessage` plus `TextPart`, `ImagePart`, and `FilePart` for multimodal input.
+- Use `hosted_tools=[{"type": "..."}]` only for provider-side tools.
+- Use `MCPServer.stdio(...)` or `MCPServer.http(...)` for client-side MCP tools.
+- Use sync wrappers only in non-async programs, and close with `agent.close()`.
 
-## Public API
-
-Use these exports from `simple_agent_base`:
-
-- `Agent`
-- `AgentConfig`
-- `ChatSession`
-- `ChatMessage`
-- `TextPart`
-- `ImagePart`
-- `FilePart`
-- `ChatSnapshot`
-- `ToolRegistry`
-- `tool`
-
-## Choose The Right API
-
-Use this routing:
-
-- one request, final answer: `await agent.run(...)`
-- one request, streamed output: `async for event in agent.stream(...)`
-- multi-turn conversation state: `chat = agent.chat()`
-- exact resume from saved chat: `agent.chat_from_snapshot(...)`
-- typed final output: pass `response_model=MyPydanticModel`
-- text-only request: pass a plain string
-- multimodal request: pass `ChatMessage(..., content=[...parts...])`
-- synchronous program: `run_sync(...)` or `stream_sync(...)`
-
-## Core Usage Patterns
-
-### Basic Agent
+## Public Imports
 
 ```python
-from simple_agent_base import Agent, AgentConfig
-
-agent = Agent(config=AgentConfig(model="gpt-5.4"))
-
-try:
-    result = await agent.run("Say hello in one sentence.")
-    print(result.output_text)
-finally:
-    await agent.aclose()
+from simple_agent_base import (
+    Agent,
+    AgentConfig,
+    ChatMessage,
+    ChatSession,
+    ChatSnapshot,
+    FilePart,
+    ImagePart,
+    MCPApprovalRequest,
+    MCPApprovalRequiredError,
+    MCPCallRecord,
+    MCPServer,
+    TextPart,
+    ToolRegistry,
+    tool,
+)
 ```
 
-### Agent With Tools
+Error classes are in `simple_agent_base.errors`:
 
 ```python
+from simple_agent_base.errors import (
+    MaxTurnsExceededError,
+    ProviderError,
+    ToolDefinitionError,
+    ToolExecutionError,
+    ToolRegistrationError,
+)
+```
+
+## Choose The API
+
+- One final answer: `await agent.run("...")`
+- Incremental text or lifecycle events: `async for event in agent.stream("...")`
+- Conversation state: `chat = agent.chat(system_prompt="...")`
+- Resume saved conversation: `chat = agent.chat_from_snapshot(snapshot_or_dict)`
+- Typed output: `await agent.run("...", response_model=MyModel)`
+- Plain text input: pass a string.
+- Message history or multimodal input: pass a list of `ChatMessage`, dicts, or strings.
+- Synchronous script: `agent.run_sync(...)` or `agent.stream_sync(...)`
+
+## Minimal Async Pattern
+
+```python
+import asyncio
+
 from simple_agent_base import Agent, AgentConfig, tool
 
 
@@ -82,313 +87,290 @@ async def ping(message: str) -> str:
     return f"pong: {message}"
 
 
-agent = Agent(
-    config=AgentConfig(model="gpt-5.4"),
-    tools=[ping],
-)
-```
-
-### Chat Session
-
-```python
-chat = agent.chat(system_prompt="You are concise.")
-
-await chat.run("My name is Anson.")
-result = await chat.run("What name did I tell you?")
-```
-
-### Structured Output
-
-```python
-from pydantic import BaseModel
-
-
-class Person(BaseModel):
-    name: str
-    age: int
-
-
-result = await agent.run(
-    "Extract the person from: Sarah is 29 years old.",
-    response_model=Person,
-)
-
-print(result.output_data)
-```
-
-### Streaming
-
-```python
-async for event in agent.stream("Explain async IO in one sentence."):
-    if event.type == "text_delta" and event.delta:
-        print(event.delta, end="")
-    elif event.type == "completed" and event.result is not None:
-        print(event.result.output_text)
-```
-
-### Multimodal Input
-
-```python
-from simple_agent_base import ChatMessage, ImagePart, TextPart
-
-result = await agent.run(
-    [
-        ChatMessage(
-            role="user",
-            content=[
-                TextPart("Describe this image."),
-                ImagePart.from_file("cat.png", detail="high"),
-            ],
-        )
-    ]
-)
-```
-
-## Exact Behavioral Rules
-
-### Input Normalization
-
-- a plain string becomes one user message
-- in a message sequence, bare strings also become user messages
-- explicit messages validate through `ChatMessage`
-- `ChatMessage.content` can be a plain string or a list of content parts
-
-### System Prompt Behavior
-
-The convenience `system_prompt` is implemented as a prepended `developer` message.
-
-Important consequences:
-
-- agent-level `system_prompt` applies by default
-- per-call `system_prompt` overrides the agent default for that call
-- `chat = agent.chat(system_prompt=...)` sets a default prompt for that chat
-- `chat.history` does not include the convenience prompt
-- chat snapshots store the session prompt separately instead of persisting a fake developer message into history
-
-### Chat Persistence
-
-- `chat.history` returns reconstructed `ChatMessage` values
-- `chat.items` returns stored raw conversation items
-- only `message` items are persisted in chat state
-- tool output items are not exposed in `chat.history`
-- after a successful streamed turn, the completed turn is persisted
-
-### Streaming Semantics
-
-`Agent.stream(...)` emits `AgentEvent` values with these types:
-
-- `text_delta`
-- `tool_call_started`
-- `tool_call_completed`
-- `completed`
-- `error`
-
-Important behavior:
-
-- final-result APIs raise runtime errors
-- streaming APIs emit one `error` event and end the stream
-- structured output appears only on the final `completed` event
-
-### Run Result Fields
-
-`AgentRunResult` contains:
-
-- `output_text`
-- `output_data`
-- `response_id`
-- `tool_results`
-- `raw_responses`
-
-## Tool Rules
-
-Use `@tool` on plain Python callables.
-
-Requirements:
-
-- every parameter must have a type annotation
-- `*args` and `**kwargs` are not allowed
-- the default tool name is the function name
-- the default tool description is the first docstring line
-- sync tools run in a worker thread
-- tool outputs are serialized to strings before being sent back to the model
-
-You can override tool metadata:
-
-```python
-@tool(name="lookup_user", description="Fetch a user record.")
-async def get_user(user_id: int) -> str:
-    return '{"id": 1, "name": "Ada"}'
-```
-
-### Parallel Tool Calls
-
-Tool execution is sequential by default.
-
-Enable same-turn parallel execution with:
-
-```python
-AgentConfig(
-    model="gpt-5.4",
-    parallel_tool_calls=True,
-)
-```
-
-Use this only when tools are independent. Do not enable it for tools with ordering dependencies or shared mutable state.
-
-## Multimodal Rules
-
-Use content parts for multimodal messages:
-
-- `TextPart("...")`
-- `ImagePart.from_url(...)`
-- `ImagePart.from_file(...)`
-- `FilePart.from_url(...)`
-- `FilePart.from_file(...)`
-
-Image file support:
-
-- PNG
-- JPEG
-- WEBP
-- GIF
-
-`ImagePart.from_file(...)` converts the file to a Base64 data URL.
-
-File part validation:
-
-- exactly one of `file_url` or `file_data` must be set
-- if using `file_data`, `filename` is required
-
-`FilePart.from_file(...)` converts supported document-like files to Base64 data URLs.
-
-## Sync Wrapper Rules
-
-Use sync wrappers only in fully synchronous programs.
-
-```python
-agent = Agent(config=AgentConfig(model="gpt-5.4"))
-
-try:
-    result = agent.run_sync("Say hello.")
-finally:
-    agent.close()
-```
-
-Restrictions:
-
-- `run_sync()` cannot be used inside a running event loop
-- `stream_sync()` cannot be used inside a running event loop
-- `chat.run_sync()` and `chat.stream_sync()` have the same restriction
-
-If you used sync wrappers, call `agent.close()` when done.
-
-## Cleanup Rules
-
-For async usage:
-
-```python
-try:
-    ...
-finally:
-    await agent.aclose()
-```
-
-For sync usage:
-
-```python
-try:
-    ...
-finally:
-    agent.close()
+async def main() -> None:
+    async with Agent(
+        config=AgentConfig(model="gpt-5.4"),
+        tools=[ping],
+        system_prompt="You are concise.",
+    ) as agent:
+        result = await agent.run("Call ping with hello and tell me the result.")
+        print(result.output_text)
+        print(result.tool_results[0].output)
+
+
+asyncio.run(main())
 ```
 
 ## Configuration
 
-`AgentConfig` fields:
-
-- `model`
-- `api_key`
-- `base_url`
-- `max_turns`
-- `parallel_tool_calls`
-- `temperature`
-- `timeout`
+```python
+AgentConfig(
+    model="gpt-5.4",
+    api_key=None,
+    base_url=None,
+    max_turns=8,
+    parallel_tool_calls=False,
+    reasoning_effort=None,
+    temperature=None,
+    timeout=None,
+    tool_timeout=None,
+)
+```
 
 Environment variables:
 
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL`
 - `OPENAI_BASE_URL`
+- `OPENAI_REASONING_EFFORT`
 
-## Failure Model
+Use `tool_timeout` to limit each local or MCP tool call. Use `timeout` for provider requests.
 
-`run()` and `run_sync()` may raise:
+## System Prompts
 
-- `ProviderError`
-- `ToolExecutionError`
-- `MaxTurnsExceededError`
+Use `system_prompt` for stable agent instructions such as role, tone, tool-use policy, output style, or constraints that should apply across runs.
 
-`stream()` and `stream_sync()` convert runtime failures into:
+Agent-level default:
 
-- `AgentEvent(type="error", error="...")`
+```python
+async with Agent(
+    config=AgentConfig(model="gpt-5.4"),
+    tools=[ping],
+    system_prompt=(
+        "You are a concise support agent. Use tools for account lookups, "
+        "do not guess account data, and explain failures plainly."
+    ),
+) as agent:
+    result = await agent.run("Check user 123.")
+```
 
-## Source Files To Inspect
+Per-call override:
 
-When changing behavior, inspect these files first:
+```python
+result = await agent.run(
+    "Explain this error.",
+    system_prompt="You are a patient Python tutor. Keep the answer beginner-friendly.",
+)
+```
 
-- `src/simple_agent_base/agent.py`
-  Main run and stream loops.
-- `src/simple_agent_base/chat.py`
-  Chat sessions, persistence, and snapshots.
-- `src/simple_agent_base/types.py`
-  Public models and multimodal helpers.
-- `src/simple_agent_base/config.py`
-  Settings.
-- `src/simple_agent_base/providers/openai.py`
-  OpenAI Responses provider.
-- `src/simple_agent_base/tools/base.py`
-  Tool schema helpers.
-- `src/simple_agent_base/tools/decorators.py`
-  `@tool`.
-- `src/simple_agent_base/tools/registry.py`
-  Tool registration and execution.
-- `src/simple_agent_base/sync_utils.py`
-  Sync runtime.
+Chat-level default:
 
-Use these tests as the behavioral contract:
+```python
+chat = agent.chat(system_prompt="You are concise and remember user preferences within this chat.")
+```
 
-- `tests/test_agent.py`
-- `tests/test_streaming.py`
-- `tests/test_tools.py`
+The library sends this convenience prompt as a prepended `developer` message. It is not stored as a normal chat history message, so use snapshots to preserve a chat-level prompt.
 
-## Preferred Workflow For Coding Agents
+## Local Tools
 
-When asked to use this package:
+Use plain typed Python callables.
 
-1. Default to `Agent`, not custom wrappers, unless the codebase already has one.
-2. Use async APIs unless the surrounding program is clearly synchronous.
-3. Use `@tool` for local tools instead of inventing manual schemas.
-4. Use `response_model` when the caller needs typed output.
-5. Use `chat = agent.chat()` for multi-turn state instead of manually rebuilding history unless the task needs explicit message control.
-6. Close agents explicitly with `await agent.aclose()` or `agent.close()`.
-7. If behavior is unclear, read only the relevant deep doc:
-   - `docs/usage.md`
-   - `docs/tools.md`
-   - `docs/structured-output.md`
-   - `docs/architecture.md`
-   - `docs/development.md`
+```python
+from simple_agent_base import tool
 
-## What Not To Invent
 
-Do not assume the package has:
+@tool(name="lookup_user", description="Fetch a user record.")
+def get_user(user_id: int) -> dict[str, object]:
+    return {"id": user_id, "name": "Ada"}
+```
 
-- planning
-- agent memory beyond in-memory chat history
-- retrieval
-- hosted tools
-- approval flows
-- retries
-- durable workflow state
-- provider-agnostic abstractions
+Rules:
 
-If a task needs those features, build them explicitly on top or state that they are outside the package's current scope.
+- Every parameter needs a type annotation.
+- `*args` and `**kwargs` are rejected.
+- Defaults become optional schema fields.
+- The first docstring line becomes the default description.
+- Sync tools run via `asyncio.to_thread(...)`.
+- Strings are returned as-is; Pydantic models are dumped as JSON; other outputs are JSON serialized.
+- Tool failures abort the run with `ToolExecutionError`; they are not converted into model-visible recovery output.
+- `parallel_tool_calls=True` runs same-turn tool calls concurrently with `asyncio.gather(...)`; enable it only for independent tools.
+
+## Structured Output
+
+Pass a Pydantic model as `response_model`.
+
+```python
+from pydantic import BaseModel
+
+
+class WeatherAnswer(BaseModel):
+    city: str
+    temperature_f: int
+    summary: str
+
+
+result = await agent.run(
+    "Use the weather tool for San Francisco and return structured data.",
+    response_model=WeatherAnswer,
+)
+
+answer = result.output_data
+```
+
+`output_text` still exists. `output_data` is the parsed Pydantic object. Structured output works with normal runs, streaming, chat sessions, tools, and multimodal input.
+
+## Streaming
+
+Streaming yields `AgentEvent` objects.
+
+```python
+async for event in agent.stream("Explain async IO in one sentence."):
+    if event.type == "text_delta" and event.delta:
+        print(event.delta, end="")
+    elif event.type == "tool_call_started":
+        print(f"\ncalling {event.tool_call.name}")
+    elif event.type == "completed" and event.result is not None:
+        print(event.result.output_text)
+```
+
+Current event types:
+
+- `text_delta`
+- `reasoning_delta`
+- `tool_arguments_delta`
+- `tool_call_started`
+- `tool_call_completed`
+- `mcp_approval_requested`
+- `mcp_call_started`
+- `mcp_call_completed`
+- `completed`
+
+Important: streaming failures raise exceptions while the stream is consumed. There is no `error` event in the current source.
+
+## Chat Sessions
+
+Use `ChatSession` for in-memory conversation state.
+
+```python
+chat = agent.chat(system_prompt="You are concise.")
+await chat.run("My name is Anson.")
+result = await chat.run("What name did I give you?")
+
+snapshot = chat.export()
+restored = agent.chat_from_snapshot(snapshot)
+```
+
+Chat snapshots store conversation items and the chat-level `system_prompt`. They do not store `AgentConfig`, provider settings, tools, or MCP servers.
+
+The convenience `system_prompt` is sent as a prepended `developer` message. It does not appear in `chat.history`.
+
+## Multimodal Input
+
+```python
+from simple_agent_base import ChatMessage, FilePart, ImagePart, TextPart
+
+result = await agent.run(
+    [
+        ChatMessage(
+            role="user",
+            content=[
+                TextPart("Summarize this screenshot and report."),
+                ImagePart.from_file("screen.png", detail="high"),
+                FilePart.from_file("report.pdf"),
+            ],
+        )
+    ]
+)
+```
+
+`ImagePart.from_file(...)` supports PNG, JPEG, WEBP, and GIF. `FilePart.from_file(...)` supports common document and text formats and sends Base64 data URLs. It does not upload through the OpenAI Files API.
+
+## Hosted Tools
+
+Hosted tools are provider-side tools. The library only validates and passes their dicts through.
+
+```python
+agent = Agent(
+    config=AgentConfig(model="gpt-5.4"),
+    hosted_tools=[{"type": "web_search"}],
+)
+```
+
+Hosted tools can be mixed with local tools and MCP servers. They do not create local `tool_call_started` or `tool_call_completed` events, and they do not appear in `result.tool_results`. Inspect `result.raw_responses` if you need hosted tool call payloads.
+
+Provider compatibility is backend-specific. Real OpenAI supports more hosted tools than most OpenAI-compatible proxies.
+
+## Client-Side MCP
+
+Use `MCPServer` for MCP servers that this library connects to locally.
+
+```python
+import sys
+from pathlib import Path
+
+from simple_agent_base import Agent, AgentConfig, MCPApprovalRequest, MCPServer
+
+
+def approve(request: MCPApprovalRequest) -> bool:
+    return request.name in {"echo", "add"}
+
+
+server_path = Path("tests/fixtures/mcp_demo_server.py").resolve()
+
+async with Agent(
+    config=AgentConfig(model="gpt-5.4"),
+    mcp_servers=[
+        MCPServer.stdio(
+            name="demo",
+            command=sys.executable,
+            args=[str(server_path), "stdio"],
+            allowed_tools=["echo", "add"],
+            require_approval=True,
+        )
+    ],
+    approval_handler=approve,
+) as agent:
+    result = await agent.run("Use demo echo with hello.")
+```
+
+MCP tools are exposed as `server__tool`, for example `demo__echo`. Name conflicts with local tools raise `ToolRegistrationError`. If `require_approval=True` and no `approval_handler` is supplied, calls raise `MCPApprovalRequiredError`.
+
+## Sync Usage
+
+```python
+from simple_agent_base import Agent, AgentConfig
+
+
+with Agent(config=AgentConfig(model="gpt-5.4")) as agent:
+    result = agent.run_sync("Say hello.")
+    print(result.output_text)
+```
+
+Do not call `run_sync()` or `stream_sync()` from inside a running event loop. In async code, use `await agent.run(...)`.
+
+## When Modifying The Library
+
+Use the source and tests as the contract. Some docs in the repo can lag the current implementation.
+
+Inspect these first:
+
+- `src/simple_agent_base/agent.py`: run loop, streaming loop, hosted tools, MCP integration, cleanup, input normalization.
+- `src/simple_agent_base/types.py`: public models, result fields, event types, file/image helpers.
+- `src/simple_agent_base/tools/base.py`: tool signature rules, schema generation, output serialization.
+- `src/simple_agent_base/tools/registry.py`: registration and execution.
+- `src/simple_agent_base/mcp.py`: MCP server config, approvals, result normalization.
+- `src/simple_agent_base/providers/openai.py`: Responses API request kwargs and response conversion.
+- `tests/test_agent.py`, `tests/test_streaming.py`, `tests/test_tools.py`, `tests/test_mcp.py`: behavioral expectations.
+
+Run focused checks with:
+
+```bash
+uv run pytest tests/test_agent.py tests/test_streaming.py tests/test_tools.py tests/test_mcp.py
+```
+
+## Common Mistakes To Avoid
+
+- Do not document or implement streaming `error` events; current streams raise exceptions.
+- Do not manually persist a fake developer message in chat snapshots.
+- Do not use sync wrappers inside FastAPI, notebooks, or other running event loops.
+- Do not enable parallel tools for shared mutable state or ordered workflows.
+- Do not assume hosted tools are executed locally.
+- Do not assume MCP hosted tool declarations like `{"type": "mcp"}` are implemented by this package; use `MCPServer`.
+- Do not forget cleanup for agents that own providers or MCP connections.
+- Do not assume `FilePart.from_file(...)` uses the OpenAI Files API.
+- Do not add broad framework features unless the request clearly asks for them.
+
+## Deeper References
+
+- `references/api-notes.md`: source-grounded API notes, edge cases, and test contract.
+- `references/examples.md`: copyable examples for common use cases.
